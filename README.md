@@ -10,3 +10,4 @@ The resulting bins can be assembled independently (“bin-then-assemble”), ena
 
 ## Overview
 ![Workflow overview](images/overview.png)
+
