@@ -7,6 +7,7 @@ This repository provides a reference-free workflow for deconvoluting long-read s
 
 The resulting bins can be assembled independently (“bin-then-assemble”), enabling targeted genome reconstruction and improved assembly quality from mixed or symbiotic samples where physical separation is impractical.
 
+Documentation and tutorials for kmer-ord https://fdboever.github.io/kmer-ord-docs/
 
 ## Overview
 ![Workflow overview](images/overview.png)
