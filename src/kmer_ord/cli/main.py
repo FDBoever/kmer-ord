@@ -11,7 +11,12 @@ from kmer_ord.workflow.operations import FastqToFasta, FastaStats, KmerCount
 from kmer_ord.workflow.operations import DimensionalityReduction
 from kmer_ord.workflow.operations import KmerMetrics
 
+#load setup cli
+from kmer_ord.cli.setup import setup_app
+
 app = typer.Typer()
+app.add_typer(setup_app)
+
 
 # -----------------------------
 # Pipeline

@@ -13,6 +13,7 @@ from pathlib import Path
 from kmer_ord import data
 import platform
 
+from kmer_ord.system.env_manager import TOOLS_ENV, run_in_env
 
 def format_size(size_in_bytes):
     return f"{size_in_bytes / (1024*1024):,.2f} MB".replace(",", ".")
@@ -28,68 +29,31 @@ def canonical_kmers(k):
     return sorted(list(canon_set))
 
 
-def get_embedded_kmer_counter_path() -> Path:
-    """
-    Return the correct embedded kmer-counter binary
-    depending on the current operating system.
-    """
-
-    base_dir = Path(__file__).parent.parent  # src/kmer_ord
-    bin_dir = base_dir / "data" / "bin"
-
-    system = platform.system()
-
-    if system == "Darwin":
-        binary_name = "kmer-counter-osx"
-    elif system == "Linux":
-        binary_name = "kmer-counter-linux"
-    else:
-        raise OSError(
-            f"Unsupported operating system: {system}. "
-            "Embedded kmer-counter is only available for macOS and Linux.")
-
-    binary_path = bin_dir / binary_name
-
-    if not binary_path.exists():
-        raise FileNotFoundError(
-            f"Expected embedded binary '{binary_name}' not found at {binary_path}."
-        )
-
-    if not binary_path.is_file():
-        raise OSError(f"Embedded binary path is not a file: {binary_path}")
-
-    return binary_path.resolve()
-
-
 def run_kmer_counter(input_file, output_tsv, kmer_length, num_threads,
-                     kmer_counter_path=None, script_name="kmer-counter"):
-    """Run kmer-counter and produce TSV output with per-step benchmarking."""
+                     script_name="kmer-counter"):
+    """
+    Run kmer-counter from TOOLS_ENV and produce TSV output with per-step benchmarking.
+    """
 
-    # Resolve the binary path
-    kmer_counter_path = Path(kmer_counter_path) if kmer_counter_path else get_embedded_kmer_counter_path()
-    
-    if not kmer_counter_path.exists():
-        raise FileNotFoundError(f"kmer-counter not found at {kmer_counter_path}")
+    temp_dir = Path(tempfile.mkdtemp(prefix="kmer_counter_temp_"))
+    input_args = f"--input {input_file} --kmer {kmer_length} --threads {num_threads}"
 
-    input_basename = Path(input_file).stem
-    temp_dir = tempfile.mkdtemp(prefix="kmer_counter_temp_")
-    input_args = f"--input {input_file} --output {output_tsv} --kmer {kmer_length} --threads {num_threads}"
-
-    # --- Run kmer-counter ---
+    # --- Run kmer-counter in TOOLS_ENV ---
     with BenchmarkTimer("Kmer_Counter_Run", script_name=script_name,
                         input_file=input_file, input_args=input_args):
         cmd = [
-            str(kmer_counter_path),
+            "kmer-counter",
             "--file", str(input_file),
-            "--ids", str(Path(temp_dir) / "sequence_headers.txt"),
+            "--ids", str(temp_dir / "sequence_headers.txt"),
             "--klength", str(kmer_length),
-            "--out", str(Path(temp_dir) / "kmer_counts.npy"),
+            "--out", str(temp_dir / "kmer_counts.npy"),
             "--collapse", "1"
         ]
-        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # run inside the tools environment
+        run_in_env(TOOLS_ENV, cmd)
 
     # --- Load numpy ---
-    npy_file = Path(temp_dir) / "kmer_counts.npy"
+    npy_file = temp_dir / "kmer_counts.npy"
     with BenchmarkTimer("Numpy_Loading", script_name=script_name,
                         input_file=input_file, input_args=input_args):
         kmer_data = np.load(npy_file, mmap_mode='r').astype(np.uint32)

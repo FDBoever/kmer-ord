@@ -1,0 +1,95 @@
+# src/kmer_ord/cli/setup.py
+from kmer_ord.utils.logging_utils import section, info, warn
+
+import typer
+
+from kmer_ord.system.env_manager import (
+    TOOLS_ENV,
+    TIARA_ENV,
+    env_exists,
+    create_tools_env,
+    create_tiara_env,
+    install_rust_tool,
+    check_tool,
+)
+
+setup_app = typer.Typer(help="Setup external dependencies for kmerord.")
+
+
+@setup_app.command("setup")
+def setup(
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Recreate environments even if they already exist.",
+    )
+):
+    """
+    Setup all required external dependencies:
+    - tools environment (infernal, barrnap, rust)
+    - tiara environment (legacy)
+    - rust-based GitHub tool installation
+    """
+    
+    print("-" * 70)
+    section("Starting kmerord setup...")
+
+    # -------------------------
+    # Tools environment
+    # -------------------------
+    if env_exists(TOOLS_ENV):
+        if force:
+            info(f"{TOOLS_ENV} exists. Recreating (--force enabled)...")
+            create_tools_env(TOOLS_ENV, recreate=True)
+        else:
+            info(f"{TOOLS_ENV} already exists. Skipping.")
+    else:
+        info(f"Creating {TOOLS_ENV}...")
+        create_tools_env(TOOLS_ENV)
+        info(f"{TOOLS_ENV} created.")
+
+    # -------------------------
+    # Tiara environment
+    # -------------------------
+    if env_exists(TIARA_ENV):
+        if force:
+            info(f"{TIARA_ENV} exists. Recreating (--force enabled)...")
+            create_tiara_env(TIARA_ENV, recreate=True)
+        else:
+            info(f"{TIARA_ENV} already exists. Skipping.")
+    else:
+        info(f"Creating {TIARA_ENV}...")
+        create_tiara_env(TIARA_ENV)
+        info(f"{TIARA_ENV} created.")
+
+    # -------------------------
+    # Rust GitHub tool
+    # -------------------------
+    section("Installing Rust-based tool...")
+    install_rust_tool()
+    info("Rust tool installation complete.")
+
+    # -------------------------
+    # Verify installed tools
+    # -------------------------
+    section("Verifying external tools...")
+
+    tools_to_check = [("kmer-counter", TOOLS_ENV),
+                      ("tiara", TIARA_ENV),
+                      ("barrnap", TOOLS_ENV),
+                      ("cmscan", TOOLS_ENV)]
+    success = True
+
+    success = True
+    for tool, env in tools_to_check:
+        if not check_tool(tool, env=env):
+            success = False
+
+    if success:
+        print("-" * 70)
+        info("\nAll tools verified successfully")
+        info("\nSetup complete. kmerord is ready to use.")
+
+    else:
+        print("-" * 70)
+        warn("Some tools failed verification. Please check installation or PATH.")

@@ -1,0 +1,9 @@
+name: kmerord-dependencies-0.1
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.11
+  - barrnap
+  - infernal
+  - rust

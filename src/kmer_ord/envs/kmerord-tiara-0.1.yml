@@ -1,0 +1,7 @@
+name: kmerord-tiara-0.1
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.8
+  - tiara
