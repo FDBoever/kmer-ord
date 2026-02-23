@@ -1,0 +1,37 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution anc packaging
+build/
+dist/
+*.egg-info/
+*.egg
+*.whl
+
+# Virtual environments
+venv/
+.env/
+.envrc
+.venv/
+
+# OS and editor junk
+.DS_Store
+.vscode/
+*.swp
+*.swo
+
+# Pytest / testing / coverage
+htmlcov/
+.coverage
+.tox/
+.pytest_cache/
+.cache/
+nosetests.xml
+coverage.xml
+*.log
+
+# Misc
+*.out
+*.tmp
