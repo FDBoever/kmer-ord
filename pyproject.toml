@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kmer-ord"
+version = "0.1.0"
+description = "Modular k-mer based feature engineering and ordination framework"
+authors = [
+    { name = "FDB" }
+]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "biopython",
+    "typer",
+    "psutil",
+    "setuptools==65.5.0",
+    "numpy>=1.23",
+    "pandas>=1.5",
+    "scikit-learn>=1.2",
+    "umap-learn",
+    "trimap",
+    "pacmap",
+]
+
+[project.scripts]
+kmer-ord = "kmer_ord.cli.main:app"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

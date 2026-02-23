@@ -1,3 +1,21 @@
+Metadata-Version: 2.4
+Name: kmer-ord
+Version: 0.1.0
+Summary: Modular k-mer based feature engineering and ordination framework
+Author: Frederik De Boever
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: biopython
+Requires-Dist: typer
+Requires-Dist: psutil
+Requires-Dist: setuptools
+Requires-Dist: numpy>=1.23
+Requires-Dist: pandas>=1.5
+Requires-Dist: scikit-learn>=1.2
+Requires-Dist: umap-learn
+Requires-Dist: trimap
+Requires-Dist: pacmap
+
 # kmer-ord
 ## A tool for pre-assembly deconvolution of complex genomic mixtures using dimensionality reduction of k-mer profiles 
 
@@ -14,23 +32,11 @@ Documentation and tutorials for kmer-ord https://fdboever.github.io/kmer-ord-doc
 
 ## Install
 
-Cceate and activate a fresh conda environment:
-
-```bash
 conda create -n kmerord python=3.11 -c conda-forge
 conda activate kmerord
-```
 
-install dependencies:
+conda install -c conda-forge numpy pandas scikit-learn umap-learn pacmap trimap numba llvmlite biopython typer
 
-```bash
-conda install -c conda-forge numpy pandas scikit-learn umap-learn pacmap trimap numba llvmlite biopython typer setuptools==65.5.0
-```
 
-clone repository and install (editable mode):
-
-```bash
-git clone <repo-url>
-cd kmer-ord
 pip install -e .
-```
+

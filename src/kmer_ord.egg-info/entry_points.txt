@@ -1,0 +1,2 @@
+[console_scripts]
+kmer-ord = kmer_ord.cli.main:app

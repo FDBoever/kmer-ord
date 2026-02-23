@@ -1,0 +1,202 @@
+# src/kmer_ord/cli/main.py
+from kmer_ord.workflow import context
+import typer
+from pathlib import Path
+from kmer_ord.io.sequence import fastq_to_fasta
+from kmer_ord.io.summary import calculate_stats
+
+from kmer_ord.workflow.context import Context
+from kmer_ord.workflow.runner import Runner
+from kmer_ord.workflow.operations import FastqToFasta, FastaStats, KmerCount
+from kmer_ord.workflow.operations import DimensionalityReduction
+from kmer_ord.workflow.operations import KmerMetrics
+
+app = typer.Typer()
+
+# -----------------------------
+# Pipeline
+# -----------------------------
+@app.command("run")
+def run_pipeline(
+    input: Path = typer.Option(..., "-i"),
+    output_dir: Path = typer.Option(..., "-o"),
+    force: bool = typer.Option(False, "--force", help="Force recomputation even if outputs exist"),
+    kmer_length: int = typer.Option(6, "--kmer", help="K-mer length"),
+    threads: int = typer.Option(4, "--threads", help="Number of threads for K-mer counting"),
+    kmer_counter_path: str = typer.Option(None, help="Path to kmer-counter binary"),
+
+    # --- DR options ---
+    dr_methods: str = typer.Option("umap","--dr", help="Comma-separated DR methods (default: umap)"),
+    normalisation: str = typer.Option("clr", "--norm", help="Normalization method (raw, relative, log, clr, zscore)"),
+    dims: int = typer.Option(2, "--dims", help="Embedding dimensions"),
+    pca_pre: bool = typer.Option(False, "--pca-pre", help="Apply PCA before DR"),
+    keep_pcs: int = typer.Option(None,"--keep-pcs", help="Number of principal components to retain"),
+    keep_variance: float = typer.Option(None,"--keep-variance",help="Variance threshold for PCA (e.g. 0.9)"),
+    screen_params: bool = typer.Option(False, "--screen_params", help="Run parameter screening for supported DR methods"),
+):
+    """
+    Run the full kmer-ord pipeline:
+    FASTQ -> FASTA -> STATS -> KMER -> DR
+    """
+
+    context = Context(input, output_dir, force=force)
+
+    method_list = [m.strip().lower() for m in dr_methods.split(",")]
+    norm_list = [n.strip().lower() for n in normalisation.split(",")]
+
+    operations = [
+        FastqToFasta(),
+        FastaStats(),
+        KmerCount(
+            kmer_length=kmer_length,
+            threads=threads,
+            kmer_counter_path=kmer_counter_path
+        ),
+        KmerMetrics(
+            chunksize=1000,
+            cpus=threads
+        ),
+        DimensionalityReduction(
+            methods=method_list,
+            normalisations=norm_list,
+            dims=dims,
+            pca_dim_red=pca_pre,
+            keep_pcs=keep_pcs,
+            keep_variance=keep_variance,
+            screen_params=screen_params,
+        )
+    ]
+
+    runner = Runner(operations)
+    runner.run(context)
+
+    # print all artifacts 
+    typer.echo("\nGenerated output:")
+    for name, path in context.artifacts.items():
+        if isinstance(path, list):
+            typer.echo(f"  {name}:")
+            for p in path:
+                typer.echo(f"    - {p}")
+        else:
+            typer.echo(f"  {name}: {path}")
+    typer.echo("\nDone.")
+
+        
+# -----------------------------
+# fastq to fasta
+@app.command("fastq-to-fasta")
+def fastq_to_fasta_cmd(
+    input: Path = typer.Option(..., "-i"),
+    output: Path = typer.Option(..., "-o"),
+    force: bool = typer.Option(False, "--force", help="Overwrite output if it exists"),
+):
+    """
+    Convert FASTQ (or FASTQ.GZ) to FASTA.
+    """
+    if output.exists() and not force:
+        typer.echo(f"Skipping conversion, FASTA already exists: {output}")
+    else:
+        fastq_to_fasta(input, output)
+        typer.echo(f"FASTQ -> FASTA conversion done: {output}")
+
+
+# -----------------------------
+# FASTA stats
+@app.command("fasta-stats")
+def fasta_stats_cmd(
+    input: Path = typer.Option(..., "-i"),
+    output_dir: Path = typer.Option(..., "-o"),
+    force: bool = typer.Option(False, "--force", help="Recalculate stats even if outputs exist"),
+):
+    """
+    Calculate per-sequence and overall statistics from a FASTA file.
+    """
+    context = Context(input, output_dir, force=force)
+    df, overall_file, tsv_file = calculate_stats(
+        input_fasta=context.fasta,
+        output_dir=context.output_dir / "summary"
+    )
+    typer.echo(f"Stats calculated. Sequence-level TSV: {tsv_file}, Overall: {overall_file}")
+
+# -----------------------------
+# K-mer counting
+@app.command("kmer-count")
+def kmer_count_cmd(
+    input: Path = typer.Option(..., "-i", help="Input FASTA file"),
+    output_dir: Path = typer.Option(..., "-o", help="Output directory"),
+    kmer_length: int = typer.Option(6, "--kmer", help="K-mer length"),
+    threads: int = typer.Option(1, "-t", help="Number of threads for counting"),
+    force: bool = typer.Option(False, "--force", help="Recalculate even if output exists"),
+    kmer_counter_path: str = typer.Option(None, help="Path to kmer-counter binary")
+):
+    """
+    Count k-mers for a FASTA file and save TSV matrix.
+    """
+    context = Context(input, output_dir, force=force)
+
+    operation = KmerCount(kmer_length=kmer_length, threads=threads, kmer_counter_path=kmer_counter_path)
+    operation.run(context)
+
+    typer.echo(f"K-mer counting complete. Matrix saved at: {context.get('kmer_matrix')}")
+
+if __name__ == "__main__":
+    app()
+
+
+# -----------------------------
+# kmer-metrics
+@app.command("kmer-metrics")
+def kmer_metrics_cmd(
+    input: Path = typer.Option(..., "-i", help="Input k-mer matrix TSV"),
+    output_dir: Path = typer.Option(..., "-o", help="Output directory"),
+    chunksize: int = typer.Option(1000, "--chunksize", help="Rows per chunk"),
+    cpus: int = typer.Option(1, "--cpus", help="Number of worker processes"),
+    force: bool = typer.Option(False, "--force", help="Recompute even if output exists"),
+):
+    """
+    Compute per-sequence k-mer metrics (Shannon diversity, unique k-mers, etc.).
+    """
+    context = Context(input, output_dir, force=force)
+    operation = KmerMetrics(chunksize=chunksize, cpus=cpus)
+    operation.run(context)
+
+    typer.echo(f"K-mer metrics saved at: {context.get('kmer_metrics')}")
+
+
+# -----------------------------
+# DR
+@app.command("dr")
+def dr_cmd(
+    input: Path = typer.Option(..., "-i", help="Input k-mer matrix TSV"),
+    output_dir: Path = typer.Option(..., "-o", help="Output directory"),
+    methods: str = typer.Option(..., "--methods", help="Comma-separated DR methods"),
+    normalisation: str = typer.Option("clr", "--norm", help="Normalization method"),
+    dims: int = typer.Option(2, "--dims", help="Embedding dimensions"),
+    force: bool = typer.Option(False, "--force", help="Recompute even if output exists"),
+    pca_pre: bool = typer.Option(False, "--pca-pre", help="Apply PCA before DR"),
+    keep_pcs: int = typer.Option(None, "--keep-pcs"),
+    keep_variance: float = typer.Option(None, "--keep-variance"),
+    screen_params: bool = typer.Option(False, "--screen_params", help="Run parameter screening for supported DR methods"),
+):
+    """
+    Run dimensionality reduction on an existing k-mer matrix.
+    """
+
+    context = Context(input, output_dir, force=force)
+
+    method_list = [m.strip().lower() for m in methods.split(",")]
+    norm_list = [n.strip().lower() for n in normalisation.split(",")]
+
+    operation = DimensionalityReduction(
+        methods=method_list,
+        normalisations=norm_list,
+        dims=dims,
+        pca_dim_red=pca_pre,
+        keep_pcs=keep_pcs,
+        keep_variance=keep_variance,
+        screen_params=screen_params,
+    )
+
+    operation.run(context)
+
+    typer.echo(f"DR embeddings saved at: {context.get('dr_embeddings')}")
