@@ -23,14 +23,19 @@ conda activate kmerord
 
 install dependencies:
 
+clone repository
+
+```bash
+git clone <repo-url>
+```
+
 ```bash
 conda install -c conda-forge numpy pandas scikit-learn umap-learn pacmap trimap numba llvmlite biopython typer setuptools==65.5.0
 ```
 
-clone repository and install (editable mode):
+enter the repository directory and install (editable mode):
 
 ```bash
-git clone <repo-url>
 cd kmer-ord
 pip install -e .
 ```
