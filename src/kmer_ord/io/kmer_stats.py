@@ -18,7 +18,6 @@ def build_dtypes(input_file: str) -> dict:
 
 def calculate_kmer_metrics_chunk(kmer_df: pd.DataFrame) -> pd.DataFrame:
     """Compute k-mer metrics for a chunk of sequences."""
-    section("Calculating k-mer metrics")
     numeric = kmer_df.select_dtypes(include=[np.number])
     if numeric.shape[1] == 0:
         raise ValueError("No numeric k-mer columns found.")
@@ -55,7 +54,7 @@ def process_kmer_file(
     cpus: int = 1,
     total_rows: int = None,) -> pd.DataFrame:
     """Process a k-mer matrix to compute metrics, optionally parallelized."""
-    
+    section("Calculating k-mer metrics")
     if output_file:
         os.makedirs(os.path.dirname(output_file), exist_ok=True)
         if os.path.exists(output_file):

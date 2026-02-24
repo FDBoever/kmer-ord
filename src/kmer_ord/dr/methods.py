@@ -72,7 +72,8 @@ def _run_single_method(X: np.ndarray, method: str, dims: int, seed: int,scale: s
         model = TSNE(n_components=dims, random_state=seed, **params)
     elif method == "umap":
         import umap
-        model = umap.UMAP(n_components=dims, random_state=seed, **params)
+        #model = umap.UMAP(n_components=dims, random_state=seed, **params)
+        model = umap.UMAP(n_components=dims, **params)
     elif method == "trimap":
         from trimap import TRIMAP
         model = TRIMAP(n_dims=dims, **params)
@@ -206,7 +207,8 @@ def _run_parameter_screen(X: pd.DataFrame,
         for n in n_neighbors_values:
             for m in min_dist_values:
                 print(f"     ... UMAP with n_neighbors={n}, min_dist={m}", flush=True)
-                model = UMAP(n_components=dims, n_neighbors=n, min_dist=m, random_state=seed)
+                #model = UMAP(n_components=dims, n_neighbors=n, min_dist=m, random_state=seed)
+                model = UMAP(n_components=dims, n_neighbors=n, min_dist=m)
                 embedding = model.fit_transform(X)
                 df = pd.DataFrame(embedding, columns=[f"{method}_{i+1}" for i in range(dims)])
                 param_str = f"n{n}_min{m}"

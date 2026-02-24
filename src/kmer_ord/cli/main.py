@@ -79,8 +79,9 @@ def run_pipeline(
     runner.run(context)
 
     # print all artifacts 
+    print("\n")
     print("-" * 70)
-    typer.echo("\nGenerated output:")
+    typer.echo("Generated output:")
     for name, path in context.artifacts.items():
         if isinstance(path, list):
             typer.echo(f"  {name}:")
@@ -89,7 +90,8 @@ def run_pipeline(
         else:
             typer.echo(f"  {name}: {path}")
     print("-" * 70)
-    typer.echo("\nDone.")
+    section("Done.")
+    print("-" * 70)
 
         
 # -----------------------------
