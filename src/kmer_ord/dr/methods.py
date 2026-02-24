@@ -165,7 +165,7 @@ def run_dr_methods(X: np.ndarray,
         )
 
         df_embed.to_csv(out_file, sep="\t", index=False)
-        print(f"Saved {method} ({normalisation}) → {out_file}")
+        print(f"Saved {method} ({normalisation}) > {out_file}")
 
         dfs.append(df_embed)
 
@@ -180,11 +180,9 @@ def run_dr_methods(X: np.ndarray,
     )
 
     merged_df.to_csv(merged_file, sep="\t", index=False)
-    print(f"Saved merged embeddings ({normalisation}) → {merged_file}")
+    print(f"Saved merged embeddings ({normalisation}) > {merged_file}")
 
     return merged_file
-
-
 
 
 def _run_parameter_screen(X: pd.DataFrame,

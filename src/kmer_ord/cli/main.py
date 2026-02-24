@@ -1,4 +1,7 @@
 # src/kmer_ord/cli/main.py
+
+
+from kmer_ord.utils.logging_utils import section, info, warn
 from kmer_ord.workflow import context
 import typer
 from pathlib import Path
@@ -28,7 +31,7 @@ def run_pipeline(
     force: bool = typer.Option(False, "--force", help="Force recomputation even if outputs exist"),
     kmer_length: int = typer.Option(6, "--kmer", help="K-mer length"),
     threads: int = typer.Option(4, "--threads", help="Number of threads for K-mer counting"),
-    kmer_counter_path: str = typer.Option(None, help="Path to kmer-counter binary"),
+    #kmer_counter_path: str = typer.Option(None, help="Path to kmer-counter binary"),
 
     # --- DR options ---
     dr_methods: str = typer.Option("umap","--dr", help="Comma-separated DR methods (default: umap)"),
@@ -41,9 +44,10 @@ def run_pipeline(
 ):
     """
     Run the full kmer-ord pipeline:
-    FASTQ -> FASTA -> STATS -> KMER -> DR
+    fastq -> fasta -> sequence stats -> kmer-counting -> DR
     """
-
+    print("-" * 70)
+    section("Starting kmer-ord...")
     context = Context(input, output_dir, force=force)
 
     method_list = [m.strip().lower() for m in dr_methods.split(",")]
@@ -54,8 +58,7 @@ def run_pipeline(
         FastaStats(),
         KmerCount(
             kmer_length=kmer_length,
-            threads=threads,
-            kmer_counter_path=kmer_counter_path
+            threads=threads
         ),
         KmerMetrics(
             chunksize=1000,
@@ -76,6 +79,7 @@ def run_pipeline(
     runner.run(context)
 
     # print all artifacts 
+    print("-" * 70)
     typer.echo("\nGenerated output:")
     for name, path in context.artifacts.items():
         if isinstance(path, list):
@@ -84,6 +88,7 @@ def run_pipeline(
                 typer.echo(f"    - {p}")
         else:
             typer.echo(f"  {name}: {path}")
+    print("-" * 70)
     typer.echo("\nDone.")
 
         
@@ -99,10 +104,10 @@ def fastq_to_fasta_cmd(
     Convert FASTQ (or FASTQ.GZ) to FASTA.
     """
     if output.exists() and not force:
-        typer.echo(f"Skipping conversion, FASTA already exists: {output}")
+        info(f"Skipping conversion, FASTA already exists: {output}")
     else:
         fastq_to_fasta(input, output)
-        typer.echo(f"FASTQ -> FASTA conversion done: {output}")
+        info(f"FASTQ -> FASTA conversion done: {output}")
 
 
 # -----------------------------
@@ -121,7 +126,7 @@ def fasta_stats_cmd(
         input_fasta=context.fasta,
         output_dir=context.output_dir / "summary"
     )
-    typer.echo(f"Stats calculated. Sequence-level TSV: {tsv_file}, Overall: {overall_file}")
+    info(f"Stats calculated. Sequence-level TSV: {tsv_file}, Overall: {overall_file}")
 
 # -----------------------------
 # K-mer counting
@@ -142,7 +147,7 @@ def kmer_count_cmd(
     operation = KmerCount(kmer_length=kmer_length, threads=threads, kmer_counter_path=kmer_counter_path)
     operation.run(context)
 
-    typer.echo(f"K-mer counting complete. Matrix saved at: {context.get('kmer_matrix')}")
+    info(f"K-mer counting complete. Matrix saved at: {context.get('kmer_matrix')}")
 
 if __name__ == "__main__":
     app()
@@ -164,8 +169,7 @@ def kmer_metrics_cmd(
     context = Context(input, output_dir, force=force)
     operation = KmerMetrics(chunksize=chunksize, cpus=cpus)
     operation.run(context)
-
-    typer.echo(f"K-mer metrics saved at: {context.get('kmer_metrics')}")
+    info(f"K-mer metrics saved at: {context.get('kmer_metrics')}")
 
 
 # -----------------------------
@@ -204,4 +208,4 @@ def dr_cmd(
 
     operation.run(context)
 
-    typer.echo(f"DR embeddings saved at: {context.get('dr_embeddings')}")
+    info(f"DR embeddings saved at: {context.get('dr_embeddings')}")

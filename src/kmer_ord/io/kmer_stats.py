@@ -3,6 +3,7 @@ import math
 import pandas as pd
 import numpy as np
 from concurrent.futures import ProcessPoolExecutor
+from kmer_ord.utils.logging_utils import section, info, warn
 
 def build_dtypes(input_file: str) -> dict:
     """Infer dtypes for chunked reading of k-mer frequency matrix."""
@@ -17,6 +18,7 @@ def build_dtypes(input_file: str) -> dict:
 
 def calculate_kmer_metrics_chunk(kmer_df: pd.DataFrame) -> pd.DataFrame:
     """Compute k-mer metrics for a chunk of sequences."""
+    section("Calculating k-mer metrics")
     numeric = kmer_df.select_dtypes(include=[np.number])
     if numeric.shape[1] == 0:
         raise ValueError("No numeric k-mer columns found.")
@@ -51,8 +53,7 @@ def process_kmer_file(
     output_file: str = None,
     chunksize: int = 1000,
     cpus: int = 1,
-    total_rows: int = None,
-) -> pd.DataFrame:
+    total_rows: int = None,) -> pd.DataFrame:
     """Process a k-mer matrix to compute metrics, optionally parallelized."""
     
     if output_file:
@@ -88,7 +89,7 @@ def process_kmer_file(
             all_chunks.append(metrics_chunk)
             if total_rows:
                 pct = processed_rows / total_rows * 100
-                print(f"[INFO] Chunk {chunk_id} processed ({pct:.2f}%)")
+                #print(f"[INFO] Chunk {chunk_id} processed ({pct:.2f}%)")
     else:
         # Parallel
         in_flight = []
@@ -105,7 +106,7 @@ def process_kmer_file(
                     all_chunks.append(metrics_chunk)
                     if total_rows:
                         pct = processed_rows / total_rows * 100
-                        print(f"[INFO] Chunk {cid} processed ({pct:.2f}%)")
+                        #print(f"[INFO] Chunk {cid} processed ({pct:.2f}%)")
             # Drain remaining
             for fut_done, cid, rows in in_flight:
                 metrics_chunk = fut_done.result()
@@ -115,7 +116,7 @@ def process_kmer_file(
                 all_chunks.append(metrics_chunk)
                 if total_rows:
                     pct = processed_rows / total_rows * 100
-                    print(f"[INFO] Chunk {cid} processed ({pct:.2f}%)")
+                    #print(f"[INFO] Chunk {cid} processed ({pct:.2f}%)")
     
     # Combine all chunks into a single DataFrame for pipeline
     combined_metrics = pd.concat(all_chunks)

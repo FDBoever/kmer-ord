@@ -4,6 +4,7 @@ from Bio import SeqIO
 import pandas as pd
 import statistics
 from kmer_ord.workflow.context import Context
+from kmer_ord.utils.logging_utils import section, info, warn
 
 
 def calculate_nx(sequence_lengths, target_percentage=50):
@@ -37,6 +38,7 @@ def calculate_stats(context: Context):
         overall_file : Path
         tsv_file : Path
     """
+    section("Calculating per-sequence statistics...")
     fasta_file = context.get("fasta")
 
     sequences = {r.id: str(r.seq) for r in SeqIO.parse(str(fasta_file), "fasta")}

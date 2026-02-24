@@ -2,8 +2,10 @@ import gzip
 from pathlib import Path
 from Bio import SeqIO
 from typing import Union
+from kmer_ord.utils.logging_utils import section, info, warn
 
 def fastq_to_fasta(input_path: Path, output_path: Path) -> None:
+    info("converting fasta to fastq...")
     input_path = Path(input_path)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -17,6 +19,7 @@ def load_fasta_or_convert(input_file: Union[str, Path], work_dir: Path) -> Path:
     """
     Handle FASTA/FASTQ (plain or gzipped) and return path to a usable FASTA.
     """
+    section("Loading fasta/fastq (or gzipped)")
     input_file = Path(input_file)
     suffix = input_file.suffix.lower()
     stem = input_file.stem

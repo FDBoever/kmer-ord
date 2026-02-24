@@ -6,10 +6,11 @@ import pandas as pd
 import importlib.resources as pkg_resources
 
 from kmer_ord.io.summary import calculate_stats
-from kmer_ord.io.kmer_counter import run_kmer_counter, get_embedded_kmer_counter_path
+from kmer_ord.io.kmer_counter import run_kmer_counter
 from .operation import Operation
 from kmer_ord.utils.benchmark import BenchmarkTimer  # <-- import BenchmarkTimer
-from kmer_ord import data
+
+from kmer_ord.system.env_manager import TOOLS_ENV, run_in_env
 
 class FastqToFasta(Operation):
     name = "fastq_to_fasta"
@@ -48,11 +49,9 @@ class KmerCount(Operation):
     requires = ["fasta"]
     produces = ["kmer_matrix"]
 
-    def __init__(self, kmer_length, threads=1, kmer_counter_path=None):
+    def __init__(self, kmer_length, threads=1):
         self.kmer_length = kmer_length
         self.threads = threads
-        # If no path is given, use embedded binary
-        self.kmer_counter_path = kmer_counter_path or get_embedded_kmer_counter_path()
 
     def run(self, context):
         output_path = context.artifact_path(f"{self.kmer_length}mer_matrix",
@@ -62,16 +61,14 @@ class KmerCount(Operation):
                             input_file=context.get("fasta"),
                             input_args=f"kmer_length={self.kmer_length}, threads={self.threads}"):
             if output_path.exists() and not context.force:
-                typer.echo(f"Skipping KmerCount, matrix already exists: {output_path}")
+                typer.echo(f"Skipping kmer-counter, matrix already exists: {output_path}")
                 context.logger.info(f"Skipping KmerCount, matrix already exists: {output_path}")
             else:
                 run_kmer_counter(
                     input_file=context.get("fasta"),
                     output_tsv=output_path,
                     kmer_length=self.kmer_length,
-                    num_threads=self.threads,
-                    kmer_counter_path=self.kmer_counter_path
-                )
+                    num_threads=self.threads)
 
         context.register("kmer_matrix", output_path)
 

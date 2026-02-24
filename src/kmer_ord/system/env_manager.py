@@ -74,11 +74,12 @@ def create_tiara_env(name: str = TIARA_ENV, recreate: bool = False):
     """Create the Tiara environment from YAML."""
     _create_env_from_yaml(name, TIARA_YAML, recreate=recreate)
 
-def run_in_env(env: str, cmd: list[str]):
-    """Run a command inside a conda environment."""
+def run_in_env(env: str, cmd: list[str], **kwargs):
+    """
+    Run a command inside a conda environment.
+    """
     full_cmd = ["conda", "run", "-n", env] + cmd
-    subprocess.run(full_cmd, check=True)
-
+    subprocess.run(full_cmd, **kwargs)
 
 # -----------------------------
 # Rust tool installation 
