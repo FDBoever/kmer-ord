@@ -40,7 +40,7 @@ cd kmer-ord
 pip install -e .
 ```
 
-Finally, use kmer-ord to set up internal environments for external tools and downloading rRNA databases (this can take a while) 
+Finally, use kmer-ord to set up internal environments for external tools and downloading rRNA databases (this can take a while, so consider grabbing yourself a coffee) 
 
 ```bash
 kmer-ord setup
