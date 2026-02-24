@@ -208,7 +208,7 @@ def _run_parameter_screen(X: pd.DataFrame,
             for m in min_dist_values:
                 print(f"     ... UMAP with n_neighbors={n}, min_dist={m}", flush=True)
                 #model = UMAP(n_components=dims, n_neighbors=n, min_dist=m, random_state=seed)
-                model = UMAP(n_components=dims, n_neighbors=n, min_dist=m)
+                model = umap.UMAP(n_components=dims, n_neighbors=n, min_dist=m)
                 embedding = model.fit_transform(X)
                 df = pd.DataFrame(embedding, columns=[f"{method}_{i+1}" for i in range(dims)])
                 param_str = f"n{n}_min{m}"
