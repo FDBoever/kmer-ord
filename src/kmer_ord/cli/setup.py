@@ -27,8 +27,8 @@ def setup(
     """
     Setup all required external dependencies:
     - tools environment (infernal, barrnap, rust)
-    - tiara environment (legacy)
-    - rust-based GitHub tool installation
+    - tiara environment
+    - kmer-counter Rust installation from GitHub
     """
     
     print("-" * 70)

@@ -135,14 +135,41 @@ def create_coordinates_table(conn, df: pd.DataFrame):
 
     methods = set()
 
-    for i in range(1, len(df.columns), 2):
-        col_x = df.columns[i]
-        col_y = df.columns[i + 1]
-        base = col_x.rsplit("_", 1)[0]
+    # detect methods dynamically
+    for col in df.columns[1:]:  # skip header column
+        base = col.rsplit("_", 1)[0]
         methods.add(base)
 
+    for method in methods:
+        # detect dimension count
+        dims = 0
+        i = 1
+        while f"{method}_{i}" in df.columns:
+            dims += 1
+            i += 1
+
+        if dims not in (2, 3):
+            raise ValueError(
+                f"{method} must have 2 or 3 dimensions for spatial storage."
+            )
+
+        if dims == 2:
+            geom_type = "POINT"
+            coord_dim = "XY"
+        else:
+            geom_type = "POINTZ"
+            coord_dim = "XYZ"
+
         cursor.execute(
-            f"SELECT AddGeometryColumn('coordinates','{base}',4326,'POINT','XY');"
+            f"""
+            SELECT AddGeometryColumn(
+                'coordinates',
+                '{method}',
+                0,
+                '{geom_type}',
+                '{coord_dim}'
+            );
+            """
         )
 
     conn.commit()
@@ -151,7 +178,6 @@ def create_coordinates_table(conn, df: pd.DataFrame):
 
 def populate_coordinates_table(conn, df: pd.DataFrame, methods):
     cursor = conn.cursor()
-
     conn.execute("BEGIN TRANSACTION;")
 
     for _, row in df.iterrows():
@@ -162,12 +188,24 @@ def populate_coordinates_table(conn, df: pd.DataFrame, methods):
         placeholders = ["?"]
 
         for method in methods:
-            x = row[f"{method}_1"]
-            y = row[f"{method}_2"]
+            dims = []
+            i = 1
+            while f"{method}_{i}" in df.columns:
+                dims.append(row[f"{method}_{i}"])
+                i += 1
+
+            if len(dims) == 2:
+                wkt = f"POINT({dims[0]} {dims[1]})"
+            elif len(dims) == 3:
+                wkt = f"POINT Z({dims[0]} {dims[1]} {dims[2]})"
+            else:
+                raise ValueError(
+                    f"{method} must have 2 or 3 dimensions."
+                )
 
             columns.append(method)
-            values.append(f"POINT({x} {y})")
-            placeholders.append("ST_GeomFromText(?,4326)")
+            values.append(wkt)
+            placeholders.append("ST_GeomFromText(?, 0)")
 
         insert_sql = f"""
             INSERT INTO coordinates ({','.join(columns)})
@@ -188,7 +226,6 @@ def inspect_database(db_file: Path, limit: int = 5):
     conn = sqlite3.connect(str(db_file))
     cursor = conn.cursor()
 
-    # Load SpatiaLite
     try:
         conn.enable_load_extension(True)
         cursor.execute("SELECT load_extension('mod_spatialite');")
@@ -200,46 +237,37 @@ def inspect_database(db_file: Path, limit: int = 5):
     for table in user_tables:
         print(f"\n--- TABLE: {table} ---")
 
-        # Check table exists
-        try:
-            cursor.execute(f"PRAGMA table_info({table});")
-            schema = cursor.fetchall()
-        except sqlite3.OperationalError:
-            print("Table not found.")
-            continue
+        cursor.execute(f"PRAGMA table_info({table});")
+        schema = cursor.fetchall()
 
         if not schema:
             print("Table not found.")
             continue
 
         try:
-            # Special handling for coordinates table
             if table == "coordinates":
 
-                # Get geometry columns via geometry_columns metadata
                 geom_query = """
-                    SELECT f_geometry_column
-                    FROM geometry_columns
-                    WHERE f_table_name = 'coordinates';
+                SELECT f_geometry_column
+                FROM geometry_columns
+                WHERE f_table_name = 'coordinates';
                 """
                 geom_cols = pd.read_sql_query(geom_query, conn)
 
                 if geom_cols.empty:
-                    # fallback if metadata missing
-                    df = pd.read_sql_query(
-                        f"SELECT * FROM coordinates LIMIT {limit};", conn
-                    )
+                    df = pd.read_sql_query(f"SELECT * FROM coordinates LIMIT {limit};", conn)
                     print(df)
                     continue
 
                 geom_names = geom_cols["f_geometry_column"].tolist()
 
-                # Build SELECT with ST_X and ST_Y for each geometry column
+                select_parts = ["header"]
                 select_parts = ["header"]
 
                 for col in geom_names:
-                    select_parts.append(f"ST_X({col}) AS {col}_x")
-                    select_parts.append(f"ST_Y({col}) AS {col}_y")
+                    select_parts.append(f"ST_X({col}) AS {col}_1")
+                    select_parts.append(f"ST_Y({col}) AS {col}_2")
+                    select_parts.append(f"ST_Z({col}) AS {col}_3")
 
                 select_sql = f"""
                     SELECT {', '.join(select_parts)}
@@ -248,10 +276,10 @@ def inspect_database(db_file: Path, limit: int = 5):
                 """
 
                 df = pd.read_sql_query(select_sql, conn)
+                df = df.dropna(axis=1, how="all")
                 print(df)
 
             else:
-                # Normal tables
                 df = pd.read_sql_query(
                     f"SELECT * FROM {table} LIMIT {limit};", conn
                 )

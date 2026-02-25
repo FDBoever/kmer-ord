@@ -10,22 +10,23 @@ from kmer_ord.io.summary import calculate_stats
 
 from kmer_ord.workflow.context import Context
 from kmer_ord.workflow.runner import Runner
-from kmer_ord.workflow.operations import FastqToFasta, FastaStats, FeatureMerge, KmerCount, SpatialiteDatabase
-from kmer_ord.workflow.operations import DimensionalityReduction
-from kmer_ord.workflow.operations import KmerMetrics
-from kmer_ord.workflow.operations import Tiara
+#from kmer_ord.workflow.operations import FastqToFasta, FastaStats, FeatureMerge, KmerCount, SpatialiteDatabase
+#from kmer_ord.workflow.operations import DimensionalityReduction
+#from kmer_ord.workflow.operations import KmerMetrics
+#from kmer_ord.workflow.operations import Tiara
 
 #load setup cli
 from kmer_ord.cli.setup import setup_app
 
-app = typer.Typer()
-app.add_typer(setup_app)
+#app = typer.Typer(add_completion=False, rich_markup_mode=None)
+app = typer.Typer(add_completion=False)
 
+app.add_typer(setup_app)
 
 # -----------------------------
 # Pipeline
 # -----------------------------
-@app.command("run")
+@app.command("run", rich_help_panel="Pipeline")
 def run_pipeline(
     input: Path = typer.Option(..., "-i"),
     output_dir: Path = typer.Option(..., "-o"),
@@ -49,6 +50,11 @@ def run_pipeline(
     """
     print("-" * 70)
     section("Starting kmer-ord...")
+    from kmer_ord.workflow.operations import (
+        FastqToFasta, FastaStats, KmerCount, KmerMetrics, Tiara,
+        DimensionalityReduction, FeatureMerge, SpatialiteDatabase
+    )
+
     context = Context(input, output_dir, force=force)
 
     method_list = [m.strip().lower() for m in dr_methods.split(",")]
@@ -95,13 +101,14 @@ def fastq_to_fasta_cmd(
     force: bool = typer.Option(False, "--force", help="Overwrite output if it exists"),
 ):
     """
-    Convert FASTQ (or FASTQ.GZ) to FASTA.
+    Convert fastq (or fastq.gz) to fasta.
     """
+    from kmer_ord.workflow.operations import FastqToFasta
     if output.exists() and not force:
         info(f"Skipping conversion, FASTA already exists: {output}")
     else:
         fastq_to_fasta(input, output)
-        info(f"FASTQ -> FASTA conversion done: {output}")
+        info(f"fastq -> fasta conversion done: {output}")
 
 
 # -----------------------------
@@ -113,32 +120,31 @@ def fasta_stats_cmd(
     force: bool = typer.Option(False, "--force", help="Recalculate stats even if outputs exist"),
 ):
     """
-    Calculate per-sequence and overall statistics from a FASTA file.
+    Calculate per-sequence and overall statistics from a fasta file.
     """
     context = Context(input, output_dir, force=force)
     df, overall_file, tsv_file = calculate_stats(
         input_fasta=context.fasta,
         output_dir=context.output_dir / "summary"
     )
-    info(f"Stats calculated. Sequence-level TSV: {tsv_file}, Overall: {overall_file}")
+    info(f"Stats calculated. Sequence-level tsv: {tsv_file}, Overall: {overall_file}")
 
 # -----------------------------
 # K-mer counting
 @app.command("kmer-count")
 def kmer_count_cmd(
-    input: Path = typer.Option(..., "-i", help="Input FASTA file"),
+    input: Path = typer.Option(..., "-i", help="Input fasta file"),
     output_dir: Path = typer.Option(..., "-o", help="Output directory"),
     kmer_length: int = typer.Option(6, "--kmer", help="K-mer length"),
     threads: int = typer.Option(1, "-t", help="Number of threads for counting"),
-    force: bool = typer.Option(False, "--force", help="Recalculate even if output exists"),
-    kmer_counter_path: str = typer.Option(None, help="Path to kmer-counter binary")
+    force: bool = typer.Option(False, "--force", help="Recalculate even if output exists")
 ):
     """
-    Count k-mers for a FASTA file and save TSV matrix.
+    Count k-mers for a fasta file and save tsv matrix.
     """
     context = Context(input, output_dir, force=force)
 
-    operation = KmerCount(kmer_length=kmer_length, threads=threads, kmer_counter_path=kmer_counter_path)
+    operation = KmerCount(kmer_length=kmer_length, threads=threads)
     operation.run(context)
 
     info(f"K-mer counting complete. Matrix saved at: {context.get('kmer_matrix')}")
@@ -170,7 +176,7 @@ def kmer_metrics_cmd(
 # DR
 @app.command("dr")
 def dr_cmd(
-    input: Path = typer.Option(..., "-i", help="Input k-mer matrix TSV"),
+    input: Path = typer.Option(..., "-i", help="Input k-mer matrix tsv"),
     output_dir: Path = typer.Option(..., "-o", help="Output directory"),
     methods: str = typer.Option(..., "--methods", help="Comma-separated DR methods"),
     normalisation: str = typer.Option("clr", "--norm", help="Normalization method"),
@@ -207,13 +213,13 @@ def dr_cmd(
 
 @app.command("run-tiara")
 def run_tiara_cmd(
-    input: Path = typer.Option(..., "-i", help="Input FASTA file"),
+    input: Path = typer.Option(..., "-i", help="Input fasta file"),
     output_dir: Path = typer.Option(..., "-o", help="Output directory"),
     threads: int = typer.Option(1, "-t", help="Number of threads"),
     force: bool = typer.Option(False, "--force", help="Recompute even if output exists"),
 ):
     """
-    Run Tiara classification on a FASTA file.
+    Run Tiara classification on a fasta file.
     """
     context = Context(input, output_dir, force=force)
 

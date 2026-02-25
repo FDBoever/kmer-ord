@@ -177,7 +177,7 @@ def run_dr_methods(X: np.ndarray,
     merged_file = (
         output_dir
         / normalisation
-        / f"{input_name}_{normalisation}_merged_embeddings.tsv"
+        / f"{input_name}_{normalisation}_{dims}D_merged_embeddings.tsv"
     )
 
     merged_df.to_csv(merged_file, sep="\t", index=False)
