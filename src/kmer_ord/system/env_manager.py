@@ -45,7 +45,6 @@ def _get_yaml_path(yaml_file: str) -> str:
 def _create_env_from_yaml(env_name: str, yaml_file: str, recreate: bool = False):
     """
     Create a conda environment from a YAML file.
-    If `recreate` is True, remove the environment first.
     """
     if recreate and env_exists(env_name):
         info(f"{env_name} exists. Removing (--force enabled)...")
@@ -74,9 +73,7 @@ def create_tiara_env(name: str = TIARA_ENV, recreate: bool = False):
     _create_env_from_yaml(name, TIARA_YAML, recreate=recreate)
 
 def run_in_env(env: str, cmd: list[str], **kwargs):
-    """
-    Run a command inside a conda environment.
-    """
+    """Run a command inside a conda environment."""
     full_cmd = ["conda", "run", "-n", env] + cmd
     subprocess.run(full_cmd, **kwargs)
 
