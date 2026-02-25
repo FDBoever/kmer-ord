@@ -1,8 +1,9 @@
 # src/kmer_ord/system/env_manager.py
 import subprocess
 import shutil
-import pkg_resources
+#import pkg_resources
 from pathlib import Path
+from importlib.resources import files
 
 from kmer_ord.utils.logging_utils import section, info, warn
 
@@ -35,13 +36,11 @@ def env_exists(name: str) -> bool:
     return name in result.stdout
 
 
-def _get_yaml_path(yaml_file: str) -> str:
-    """
-    Get the absolute path to a bundled YAML file inside the package.
-    Works even if installed via pip.
-    """
-    return pkg_resources.resource_filename("kmer_ord", yaml_file)
+#def _get_yaml_path(yaml_file: str) -> str:
+#    return pkg_resources.resource_filename("kmer_ord", yaml_file)
 
+def _get_yaml_path(yaml_file: str) -> str:
+    return str(files("kmer_ord").joinpath(yaml_file))
 
 def _create_env_from_yaml(env_name: str, yaml_file: str, recreate: bool = False):
     """
