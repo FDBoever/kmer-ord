@@ -88,12 +88,21 @@ class Context:
     # -------------------------
     def exists(self, name: str) -> bool:
         """
-        Check if a registered artifact exists on disk and should be used.
-
-        Returns False if force=True (to trigger recomputation).
+        Check if a registered artifact exists on disk.
+        Supports both single Path and list of Paths.
+        Returns False if force=True.
         """
-        path = self.get(name)
-        return path.exists() and not self.force
+        if name not in self.artifacts:
+            return False
+
+        artifact = self.artifacts[name]
+
+        if self.force:
+            return False
+
+        if isinstance(artifact, list):
+            return all(p.exists() for p in artifact)
+        return artifact.exists()
 
     def artifact_exists_or_skip(self, name: str) -> bool:
         """

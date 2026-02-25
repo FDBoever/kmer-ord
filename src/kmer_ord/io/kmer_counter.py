@@ -81,7 +81,7 @@ def run_kmer_counter(input_file, output_tsv, kmer_length, num_threads,
                         input_file=input_file, input_args=input_args):
         os.makedirs(Path(output_tsv).parent, exist_ok=True)
         with open(output_tsv, "w") as f:
-            f.write("Sequence_ID\t" + "\t".join(kmer_keys) + "\n")
+            f.write("sequence_id\t" + "\t".join(kmer_keys) + "\n")
             for i in range(len(kmer_data)):
                 f.write(sequence_headers[i] + "\t" + "\t".join(map(str, kmer_data[i])) + "\n")
 

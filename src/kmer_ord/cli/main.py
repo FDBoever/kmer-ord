@@ -10,9 +10,10 @@ from kmer_ord.io.summary import calculate_stats
 
 from kmer_ord.workflow.context import Context
 from kmer_ord.workflow.runner import Runner
-from kmer_ord.workflow.operations import FastqToFasta, FastaStats, KmerCount
+from kmer_ord.workflow.operations import FastqToFasta, FastaStats, FeatureMerge, KmerCount, SpatialiteDatabase
 from kmer_ord.workflow.operations import DimensionalityReduction
 from kmer_ord.workflow.operations import KmerMetrics
+from kmer_ord.workflow.operations import Tiara
 
 #load setup cli
 from kmer_ord.cli.setup import setup_app
@@ -30,7 +31,7 @@ def run_pipeline(
     output_dir: Path = typer.Option(..., "-o"),
     force: bool = typer.Option(False, "--force", help="Force recomputation even if outputs exist"),
     kmer_length: int = typer.Option(6, "--kmer", help="K-mer length"),
-    threads: int = typer.Option(4, "--threads", help="Number of threads for K-mer counting"),
+    threads: int = typer.Option(4, "--threads", help="Number of threads"),
     #kmer_counter_path: str = typer.Option(None, help="Path to kmer-counter binary"),
 
     # --- DR options ---
@@ -56,24 +57,15 @@ def run_pipeline(
     operations = [
         FastqToFasta(),
         FastaStats(),
-        KmerCount(
-            kmer_length=kmer_length,
-            threads=threads
-        ),
-        KmerMetrics(
-            chunksize=1000,
-            cpus=threads
-        ),
-        DimensionalityReduction(
-            methods=method_list,
-            normalisations=norm_list,
-            dims=dims,
-            pca_dim_red=pca_pre,
-            keep_pcs=keep_pcs,
-            keep_variance=keep_variance,
-            screen_params=screen_params,
-        )
-    ]
+        KmerCount(kmer_length=kmer_length, threads=threads),
+        KmerMetrics(chunksize=1000, cpus=threads),
+        Tiara(threads=threads),
+        DimensionalityReduction(methods=method_list, normalisations=norm_list,
+                                dims=dims, pca_dim_red=pca_pre, 
+                                keep_pcs=keep_pcs, keep_variance=keep_variance,
+                                screen_params=screen_params),
+        FeatureMerge(),
+        SpatialiteDatabase()]
 
     runner = Runner(operations)
     runner.run(context)
@@ -93,7 +85,7 @@ def run_pipeline(
     section("Done.")
     print("-" * 70)
 
-        
+  
 # -----------------------------
 # fastq to fasta
 @app.command("fastq-to-fasta")
@@ -211,3 +203,37 @@ def dr_cmd(
     operation.run(context)
 
     info(f"DR embeddings saved at: {context.get('dr_embeddings')}")
+
+
+@app.command("run-tiara")
+def run_tiara_cmd(
+    input: Path = typer.Option(..., "-i", help="Input FASTA file"),
+    output_dir: Path = typer.Option(..., "-o", help="Output directory"),
+    threads: int = typer.Option(1, "-t", help="Number of threads"),
+    force: bool = typer.Option(False, "--force", help="Recompute even if output exists"),
+):
+    """
+    Run Tiara classification on a FASTA file.
+    """
+    context = Context(input, output_dir, force=force)
+
+    operation = Tiara(threads=threads)
+    operation.run(context)
+
+    info(f"Tiara output saved at: {context.get('tiara')}")
+
+
+@app.command("build-db")
+def build_database(
+    input: Path = typer.Option(..., "-i"),
+    output_dir: Path = typer.Option(..., "-o"),
+    force: bool = typer.Option(False, "--force"),):
+    """
+    Build Spatialite database from available artifacts.
+    """
+    context = Context(input, output_dir, force=force)
+
+    operation = SpatialiteDatabase()
+    operation.run(context)
+
+    info(f"Database created at: {context.get('database')}")

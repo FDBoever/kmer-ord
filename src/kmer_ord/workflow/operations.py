@@ -7,8 +7,9 @@ import importlib.resources as pkg_resources
 
 from kmer_ord.io.summary import calculate_stats
 from kmer_ord.io.kmer_counter import run_kmer_counter
+from kmer_ord.io.run_tiara import run_tiara
 from .operation import Operation
-from kmer_ord.utils.benchmark import BenchmarkTimer  # <-- import BenchmarkTimer
+from kmer_ord.utils.benchmark import BenchmarkTimer
 
 from kmer_ord.system.env_manager import TOOLS_ENV, run_in_env
 
@@ -213,3 +214,152 @@ class KmerMetrics(Operation):
                 )
 
         context.register("kmer_metrics", output_file)
+
+
+class Tiara(Operation):
+    name = "tiara"
+    requires = ["fasta"]
+    produces = ["tiara"]
+
+    def __init__(self, threads=1):
+        self.threads = threads
+
+    def run(self, context):
+        input_fasta = context.get("fasta")
+
+        output_file = context.artifact_path(
+            name="tiara",
+            subdir="tiara",
+            suffix=".tsv"
+        )
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+
+        with BenchmarkTimer(
+            label=self.name,
+            input_file=input_fasta,
+            input_args=f"threads={self.threads}"
+        ):
+            if output_file.exists() and not context.force:
+                typer.echo(f"Skipping Tiara, output exists: {output_file}")
+                context.logger.info(f"Skipping Tiara, output exists: {output_file}")
+            else:
+                run_tiara(
+                    input_file=input_fasta,
+                    output_file=output_file,
+                    threads=self.threads
+                )
+
+        context.register("tiara", output_file)
+
+
+class FeatureMerge(Operation):
+    name = "feature-merge"
+    requires = ["kmer_metrics", "summary_per_sequence"]
+    produces = ["merged_features"]
+
+    def run(self, context):
+        import pandas as pd
+
+        def normalize_id_column(df):
+            possible_id_cols = ["sequence_id", "header", "seq_id", "contig", "id"]
+            for col in possible_id_cols:
+                if col in df.columns:
+                    if col != "sequence_id":
+                        df = df.rename(columns={col: "sequence_id"})
+                    return df
+            raise ValueError(f"No valid sequence ID column found in {df.columns.tolist()}")
+
+        # Required artifacts
+        kmer_df = normalize_id_column(pd.read_csv(context.get("kmer_metrics"), sep="\t"))
+        summary_df = normalize_id_column(pd.read_csv(context.get("summary_per_sequence"), sep="\t"))
+        merged = kmer_df.merge(summary_df, on="sequence_id", how="left")
+
+        #merge tiara based on sequence_id, if exists
+        try:
+            tiara_path = context.get("tiara")
+        except ValueError:
+            tiara_path = None
+
+        if tiara_path:
+            tiara_df = normalize_id_column(pd.read_csv(tiara_path, sep="\t"))
+            merged = merged.merge(tiara_df, on="sequence_id", how="left")
+
+        if merged["sequence_id"].duplicated().any():
+            raise RuntimeError("Duplicate sequence_id detected after merge.")
+
+        output_path = context.output_dir / "features" / "merged_features.tsv"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        merged.to_csv(output_path, sep="\t", index=False)
+        context.register("merged_features", output_path)
+
+
+from kmer_ord.io.database import (initialize_spatialite_db,
+                                  create_fasta_table,
+                                  populate_fasta_table,
+                                  create_features_table,
+                                  populate_features_table,
+                                  create_coordinates_table,
+                                  populate_coordinates_table,
+                                  inspect_database)
+
+class SpatialiteDatabase(Operation):
+    name = "spatialite-db"
+    requires = ["fasta", "merged_features", "dr_embeddings"]
+    produces = ["database"]
+
+    def __init__(self, db_name="kmerord.sqlite"):
+        self.db_name = db_name
+
+    def run(self, context):
+        output_path = context.output_dir / self.db_name
+
+        if output_path.exists() and not context.force:
+            context.register("database", output_path)
+            return
+
+        if output_path.exists():
+            output_path.unlink()
+
+        conn = initialize_spatialite_db(output_path)
+
+        # FASTA TABLE
+        fasta_file = context.get("fasta")
+        create_fasta_table(conn)
+        populate_fasta_table(conn, fasta_file)
+
+        # FEATURES TABLE
+        features_path = context.get("merged_features")
+        features_df = pd.read_csv(features_path, sep="\t")
+
+        if "sequence_id" not in features_df.columns:
+            raise RuntimeError(
+                "merged_features.tsv must contain a 'sequence_id' column."
+            )
+
+        if features_df["sequence_id"].duplicated().any():
+            raise RuntimeError(
+                "Duplicate sequence_id detected in merged_features."
+            )
+
+        create_features_table(conn, features_df)
+        populate_features_table(conn, features_df)
+
+        # COORDINATES TABLE
+        embedding_files = context.get("dr_embeddings")
+
+        for emb_file in embedding_files:
+            # Load coordinates (no sequence_id)
+            coords_df = pd.read_csv(emb_file, sep="\t")
+
+            # Inject sequence_id from features table (order must match)
+            features_path = context.get("merged_features")
+            features_df = pd.read_csv(features_path, sep="\t")
+            coords_df.insert(0, "sequence_id", features_df["sequence_id"].values)
+        
+        methods = create_coordinates_table(conn, coords_df)
+        populate_coordinates_table(conn, coords_df, methods)
+
+        conn.close()
+        context.register("database", output_path)
+        inspect_database(output_path)
