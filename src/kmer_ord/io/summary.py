@@ -43,12 +43,10 @@ def calculate_stats(context: Context):
 
     sequences = {r.id: str(r.seq) for r in SeqIO.parse(str(fasta_file), "fasta")}
 
-    results_dict = {
-        "sequence_id": [],
-        "Length": [],
-        "GC_Content": [],
-        "AT_Content": [],
-    }
+    results_dict = {"sequence_id": [],
+                    "Length": [],
+                    "GC_Content": [],
+                    "AT_Content": []}
 
     total_length = 0
     gc_contents = []
@@ -66,7 +64,7 @@ def calculate_stats(context: Context):
         total_length += length
         gc_contents.append(gc)
 
-    # Validate array lengths
+    # check array lengths
     array_lengths = set(len(arr) for arr in results_dict.values())
     if len(array_lengths) > 1:
         raise ValueError("All arrays must be of the same length")
@@ -78,11 +76,10 @@ def calculate_stats(context: Context):
     avg_gc = statistics.mean(gc_contents)
     std_gc = statistics.stdev(gc_contents) if len(gc_contents) > 1 else 0
 
-    # --- Use Context for canonical artifact paths ---
     overall_file = context.artifact_path("overall_stats", subdir="summary", suffix=".txt")
     tsv_file = context.artifact_path("stats_per_sequence", subdir="summary", suffix=".tsv")
 
-    # Save overall stats
+    # save overall stats
     with overall_file.open("w") as f:
         f.write(f"Total nr of sequences: {total_seqs}\n")
         f.write(f"Total Length: {total_length} bp\n")
@@ -91,11 +88,11 @@ def calculate_stats(context: Context):
         f.write(f"Average GC Content: {avg_gc:.2f}%\n")
         f.write(f"GC Content Standard Deviation: {std_gc:.2f}\n")
 
-    # Save per-sequence TSV
+    # save per-sequence stats
     tsv_file.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(tsv_file, sep="\t", index=False)
 
-    # Register artifacts in context
+    # Register files
     context.register("summary_overall", overall_file)
     context.register("summary_per_sequence", tsv_file)
 

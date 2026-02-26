@@ -1,36 +1,25 @@
 # src/kmer_ord/cli/setup.py
 from kmer_ord.utils.logging_utils import section, info, warn
-
 import typer
 
-from kmer_ord.system.env_manager import (
-    TOOLS_ENV,
-    TIARA_ENV,
-    env_exists,
-    create_tools_env,
-    create_tiara_env,
-    install_rust_tool,
-    check_tool,
-)
 
 setup_app = typer.Typer(help="Setup external dependencies for kmerord.")
 
 
 @setup_app.command("setup")
 def setup(
-    force: bool = typer.Option(
-        False,
-        "--force",
-        help="Recreate environments even if they already exist.",
-    )
-):
+    force: bool = typer.Option(False, "-f","--force", help="Recreate environments even if they already exist.")):
     """
     Setup all required external dependencies:
     - tools environment (infernal, barrnap, rust)
     - tiara environment
     - kmer-counter Rust installation from GitHub
     """
-    
+    from kmer_ord.system.env_manager import (TOOLS_ENV, TIARA_ENV, 
+                                             env_exists, create_tools_env, 
+                                             create_tiara_env, install_rust_tool, 
+                                             check_tool)
+
     print("-" * 70)
     section("Starting kmerord setup...")
 

@@ -99,7 +99,7 @@ def _run_single_method(X: np.ndarray, method: str, dims: int, seed: int,scale: s
     return model.fit_transform(X)
 
 
-def run_dr_methods(X: np.ndarray,
+def run_dr_methods(X: np.ndarray | pd.DataFrame,
                    methods: list[str],
                    dims: int,
                    seed: int,
@@ -107,21 +107,37 @@ def run_dr_methods(X: np.ndarray,
                    screen_params: bool,
                    output_dir: Path,
                    normalisation: str,
-                   input_name: str,) -> Path:
+                   input_name: str,
+                   sequence_ids: list | pd.Index | None = None) -> Path:
     """
     Run selected DR methods for a single normalisation.
 
-    - Saves individual method files
-    - Optionally performs parameter screening
-    - Creates ONE merged file across methods (same normalisation)
-    - Returns merged file path
+    Adds sequence_id column to all embeddings for downstream merging.
+
+    Parameters
+    ----------
+    X : np.ndarray or pd.DataFrame
+        Feature matrix.
+    sequence_ids : list or pd.Index, optional
+        Sequence identifiers. Must match number of rows in X.
+
+    Returns
+    -------
+    merged_file : Path
+        Path to merged embeddings file
     """
+
+    if sequence_ids is None:
+        # Use row index if X is DataFrame, else default numeric IDs
+        if isinstance(X, pd.DataFrame):
+            sequence_ids = X.index
+        else:
+            sequence_ids = np.arange(X.shape[0])
 
     if "all" in methods:
         methods = ALL_METHODS
 
     output_dir.mkdir(parents=True, exist_ok=True)
-
     dfs = []
 
     for method in methods:
@@ -130,9 +146,7 @@ def run_dr_methods(X: np.ndarray,
         method_dir.mkdir(parents=True, exist_ok=True)
 
         # parameter screening
-        # --------------------------------------------------
         if screen_params and method in SCREENABLE_METHODS:
-
             screen_dir = method_dir / "parameter_screen"
             screen_dir.mkdir(parents=True, exist_ok=True)
 
@@ -145,10 +159,10 @@ def run_dr_methods(X: np.ndarray,
                 output_dir=screen_dir,
                 normalisation=normalisation,
                 input_name=input_name,
+                sequence_ids=sequence_ids,  # pass sequence IDs here too
             )
 
         # Default embedding
-        # --------------------------------------------------
         embedding = _run_single_method(
             X=X,
             method=method,
@@ -159,122 +173,103 @@ def run_dr_methods(X: np.ndarray,
 
         columns = [f"{method}_{i+1}" for i in range(dims)]
         df_embed = pd.DataFrame(embedding, columns=columns)
+        df_embed.insert(0, "sequence_id", sequence_ids)  # add sequence_id column
 
-        out_file = (
-            method_dir
-            / f"{input_name}_{normalisation}_{method}_{dims}D.tsv"
-        )
-
+        out_file = method_dir / f"{input_name}_{normalisation}_{method}_{dims}D.tsv"
         df_embed.to_csv(out_file, sep="\t", index=False)
         print(f"Saved {method} ({normalisation}) > {out_file}")
 
         dfs.append(df_embed)
 
-    # merge across methods (same normalisation)
-    # --------------------------------------------------
+    # merge across methods
     merged_df = pd.concat(dfs, axis=1)
+    # Ensure only one sequence_id column
+    merged_df = merged_df.loc[:, ~merged_df.columns.duplicated()]
 
-    merged_file = (
-        output_dir
-        / normalisation
-        / f"{input_name}_{normalisation}_{dims}D_merged_embeddings.tsv"
-    )
-
+    merged_file = output_dir / normalisation / f"{input_name}_{normalisation}_{dims}D_merged_embeddings.tsv"
     merged_df.to_csv(merged_file, sep="\t", index=False)
     print(f"Saved merged embeddings ({normalisation}) > {merged_file}")
 
     return merged_file
 
 
-def _run_parameter_screen(X: pd.DataFrame,
-                          method: str,
-                          dims: int,
-                          seed: int,
-                          scale: str,
-                          output_dir: Path,
-                          normalisation: str,
-                          input_name: str,) -> list[Path]:
+def _run_parameter_screen(
+    X: pd.DataFrame,
+    method: str,
+    dims: int,
+    seed: int,
+    scale: str,
+    output_dir: Path,
+    normalisation: str,
+    input_name: str,
+    sequence_ids: list | pd.Index
+) -> list[Path]:
     """
     Perform parameter screening for a given DR method.
-    Saves individual files for each parameter combination, returns list of saved paths.
+    Saves individual files for each parameter combination with sequence_id column.
+    Returns list of saved paths.
     """
+
     output_paths = []
+
+    def save_embedding(embedding: np.ndarray, param_str: str):
+        """Helper to save a DataFrame with sequence_id."""
+        df = pd.DataFrame(embedding, columns=[f"{method}_{i+1}" for i in range(dims)])
+        df.insert(0, "sequence_id", sequence_ids)
+        out_file = output_dir / f"{input_name}_{normalisation}_{method}_{param_str}_{dims}D.tsv"
+        df.to_csv(out_file, sep="\t", index=False)
+        output_paths.append(out_file)
 
     if method == "umap":
         n_neighbors_values = [5, 10, 50, 100, 150]
         min_dist_values = [0, 0.1, 0.25, 0.5, 1.0]
-
         for n in n_neighbors_values:
             for m in min_dist_values:
                 print(f"     ... UMAP with n_neighbors={n}, min_dist={m}", flush=True)
-                #model = UMAP(n_components=dims, n_neighbors=n, min_dist=m, random_state=seed)
                 model = umap.UMAP(n_components=dims, n_neighbors=n, min_dist=m)
                 embedding = model.fit_transform(X)
-                df = pd.DataFrame(embedding, columns=[f"{method}_{i+1}" for i in range(dims)])
-                param_str = f"n{n}_min{m}"
-                out_file = output_dir / f"{input_name}_{normalisation}_{method}_{param_str}_{dims}D.tsv"
-                df.to_csv(out_file, sep="\t", index=False)
-                output_paths.append(out_file)
+                save_embedding(embedding, param_str=f"n{n}_min{m}")
 
     elif method == "tsne":
         perplexity_values = [5, 10, 30, 50, 100]
         learning_rate_values = [10, 100, 200, 500]
-
         for p in perplexity_values:
             for lr in learning_rate_values:
                 print(f"     ... t-SNE with perplexity={p}, learning_rate={lr}", flush=True)
-                model = TSNE(n_components=dims, perplexity=p, learning_rate=lr, max_iter=1000, random_state=seed)
+                model = TSNE(n_components=dims, perplexity=p, learning_rate=lr,
+                             max_iter=1000, random_state=seed)
                 embedding = model.fit_transform(X)
-                df = pd.DataFrame(embedding, columns=[f"{method}_{i+1}" for i in range(dims)])
-                param_str = f"p{p}_lr{lr}"
-                out_file = output_dir / f"{input_name}_{normalisation}_{method}_{param_str}_{dims}D.tsv"
-                df.to_csv(out_file, sep="\t", index=False)
-                output_paths.append(out_file)
+                save_embedding(embedding, param_str=f"p{p}_lr{lr}")
 
     elif method == "trimap":
         n_inliers_values = [10, 25, 50, 100, 150]
         weight_temp_values = [0.1, 0.5, 1.0, 2.0, 2.5]
-
         for n in n_inliers_values:
             for w in weight_temp_values:
                 print(f"     ... TRIMAP with n_inliers={n}, weight_temp={w}", flush=True)
                 model = TRIMAP(n_dims=dims, n_inliers=n, weight_temp=w)
                 embedding = model.fit_transform(X)
-                df = pd.DataFrame(embedding, columns=[f"{method}_{i+1}" for i in range(dims)])
-                param_str = f"inliers{n}_weighttemp{w}"
-                out_file = output_dir / f"{input_name}_{normalisation}_{method}_{param_str}_{dims}D.tsv"
-                df.to_csv(out_file, sep="\t", index=False)
-                output_paths.append(out_file)
+                save_embedding(embedding, param_str=f"inliers{n}_weighttemp{w}")
 
     elif method == "pacmap":
         n_neighbors_values = [10, 25, 50, 100, 150]
         FP_ratio_values = [0.1, 0.5, 1.0, 2.0, 5]
-
         for n in n_neighbors_values:
             for fp in FP_ratio_values:
                 print(f"     ... PaCMAP with n_neighbors={n}, FP_ratio={fp}", flush=True)
                 model = PaCMAP(n_components=dims, n_neighbors=n, FP_ratio=fp)
                 embedding = model.fit_transform(X)
-                df = pd.DataFrame(embedding, columns=[f"{method}_{i+1}" for i in range(dims)])
-                param_str = f"n{n}_FPratio{fp}"
-                out_file = output_dir / f"{input_name}_{normalisation}_{method}_{param_str}_{dims}D.tsv"
-                df.to_csv(out_file, sep="\t", index=False)
-                output_paths.append(out_file)
+                save_embedding(embedding, param_str=f"n{n}_FPratio{fp}")
 
     elif method == "localmap":
         n_neighbors_values = [10, 25, 50, 100, 150]
         FP_ratio_values = [0.1, 0.5, 1.0, 2.0, 5]
-
         for n in n_neighbors_values:
             for fp in FP_ratio_values:
                 print(f"     ... LocalMAP with n_neighbors={n}, FP_ratio={fp}", flush=True)
                 model = LocalMAP(n_components=dims, n_neighbors=n, FP_ratio=fp)
                 embedding = model.fit_transform(X)
-                df = pd.DataFrame(embedding, columns=[f"{method}_{i+1}" for i in range(dims)])
-                param_str = f"n{n}_FPratio{fp}"
-                out_file = output_dir / f"{input_name}_{normalisation}_{method}_{param_str}_{dims}D.tsv"
-                df.to_csv(out_file, sep="\t", index=False)
-                output_paths.append(out_file)
+                save_embedding(embedding, param_str=f"n{n}_FPratio{fp}")
 
     else:
         raise ValueError(f"Parameter screening not implemented for method: {method}")

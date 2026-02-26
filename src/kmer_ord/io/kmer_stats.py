@@ -37,14 +37,11 @@ def calculate_kmer_metrics_chunk(kmer_df: pd.DataFrame) -> pd.DataFrame:
         shannon_bits = -np.sum(np.where(positive, probs * np.log2(probs), 0.0), axis=1)
 
     metrics_chunk = pd.DataFrame(
-        {
-            "total_nonzero_kmers": total_nonzero,
-            "num_unique_kmers": total_nonzero,
-            "shannon_evenness": shannon_nats,
-            "shannon_diversity": shannon_bits,
-        },
-        index=kmer_df.index,
-    )
+        {"total_nonzero_kmers": total_nonzero,
+         "num_unique_kmers": total_nonzero,
+         "shannon_evenness": shannon_nats,
+         "shannon_diversity": shannon_bits},
+        index=kmer_df.index)
     return metrics_chunk
 
 def process_kmer_file(
@@ -71,8 +68,7 @@ def process_kmer_file(
                 output_file,
                 sep="\t",
                 mode="w" if first else "a",
-                header=first
-            )
+                header=first)
 
     first_chunk = True
     processed_rows = 0

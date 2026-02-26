@@ -42,9 +42,8 @@ def create_fasta_table(conn):
             header TEXT PRIMARY KEY,
             full_header TEXT,
             sequence TEXT,
-            qualities TEXT
-        );
-    """)
+            qualities TEXT);
+        """)
     conn.commit()
 
 
@@ -217,40 +216,130 @@ def populate_coordinates_table(conn, df: pd.DataFrame, methods):
     conn.commit()
 
 
+# -----------------------------
+# DR EMBEDDINGS TABLES
+# -----------------------------
+def save_dr_embeddings(conn, df: pd.DataFrame, method_name: str, force: bool = False):
+    table_name = f"embedding_{method_name.lower()}"
+
+    # Check if table exists
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?;", (table_name,)
+    )
+    exists = cursor.fetchone() is not None
+
+    if exists and not force:
+        print(f"Skipping DR embeddings for '{method_name}', table already exists: {table_name}")
+        return table_name
+
+    if exists and force:
+        print(f"Overwriting existing embeddings table '{table_name}'")
+        conn.execute(f"DROP TABLE IF EXISTS {table_name};")
+
+    df.to_sql(table_name, conn, index=False)
+    return table_name
+
+# -----------------------------
+# CLUSTERING TABLE
+# -----------------------------
+def save_clustering_results(conn: sqlite3.Connection, cluster_files: list[Path], force: bool = False):
+    """
+    Merge multiple clustering result files into a single flat table and save as 'Clustering'.
+    """
+    dfs = [pd.read_csv(f, sep="\t") for f in cluster_files]
+    merged_df = pd.concat(dfs, axis=1)
+
+    # Keep only one sequence_id column
+    if "sequence_id" in merged_df.columns:
+        merged_df = merged_df.loc[:, ~merged_df.columns.duplicated()]
+
+    table_name = "Clustering"
+    if force:
+        conn.execute(f"DROP TABLE IF EXISTS {table_name};")
+
+    merged_df.to_sql(table_name, conn, index=False)
+    return table_name
+
+# -----------------------------
+# WRAPPER TO ADD DR + CLUSTERING TO DB
+# -----------------------------
+def add_dr_and_clusters_to_db(db_path: Path, embedding_files: list[Path], cluster_files: list[Path], force: bool = False):
+    """
+    Opens (or creates) DB, adds DR embedding tables and a single Clustering table.
+    Returns the sqlite3 connection path.
+    """
+    conn = sqlite3.connect(str(db_path))
+
+    # Save embeddings
+    for emb_file in embedding_files:
+        df = pd.read_csv(emb_file, sep="\t")
+        # method name extraction from filename
+        method_name = Path(emb_file).stem.split("_")[-3]
+        save_dr_embeddings(conn, df, method_name, force=force)
+
+    # Save clustering
+    save_clustering_results(conn, cluster_files, force=force)
+
+    conn.commit()
+    conn.close()
+    return db_path
 
 # ---------------------------------------------------------
 # DATABASE INSPECTION (DEBUGGING / QA)
 # ---------------------------------------------------------
 
 def inspect_database(db_file: Path, limit: int = 5):
+    """
+    Inspect a SpatiaLite/SQLite database.
+    Dynamically lists all tables, including:
+    - fasta
+    - features
+    - coordinates
+    - embedding_<method>
+    - Clustering
+    Shows the first `limit` rows for each table.
+    """
     conn = sqlite3.connect(str(db_file))
     cursor = conn.cursor()
 
+    # Try enabling SpatiaLite extension
     try:
         conn.enable_load_extension(True)
         cursor.execute("SELECT load_extension('mod_spatialite');")
     except sqlite3.OperationalError:
         pass
 
-    user_tables = ["fasta", "features", "coordinates"]
+    # Query all user tables
+    cursor.execute("""
+        SELECT name 
+        FROM sqlite_master 
+        WHERE type='table';
+    """)
+    tables = [row[0] for row in cursor.fetchall()]
 
-    for table in user_tables:
+    if not tables:
+        print("No tables found in database.")
+        conn.close()
+        return
+
+    for table in tables:
         print(f"\n--- TABLE: {table} ---")
 
         cursor.execute(f"PRAGMA table_info({table});")
         schema = cursor.fetchall()
 
         if not schema:
-            print("Table not found.")
+            print("Table not found or empty.")
             continue
 
         try:
+            # Special handling for coordinates (geometry columns)
             if table == "coordinates":
-
                 geom_query = """
-                SELECT f_geometry_column
-                FROM geometry_columns
-                WHERE f_table_name = 'coordinates';
+                    SELECT f_geometry_column
+                    FROM geometry_columns
+                    WHERE f_table_name = 'coordinates';
                 """
                 geom_cols = pd.read_sql_query(geom_query, conn)
 
@@ -260,10 +349,7 @@ def inspect_database(db_file: Path, limit: int = 5):
                     continue
 
                 geom_names = geom_cols["f_geometry_column"].tolist()
-
                 select_parts = ["header"]
-                select_parts = ["header"]
-
                 for col in geom_names:
                     select_parts.append(f"ST_X({col}) AS {col}_1")
                     select_parts.append(f"ST_Y({col}) AS {col}_2")
@@ -274,18 +360,16 @@ def inspect_database(db_file: Path, limit: int = 5):
                     FROM coordinates
                     LIMIT {limit};
                 """
-
                 df = pd.read_sql_query(select_sql, conn)
                 df = df.dropna(axis=1, how="all")
                 print(df)
 
             else:
-                df = pd.read_sql_query(
-                    f"SELECT * FROM {table} LIMIT {limit};", conn
-                )
+                # Generic table, just read first rows
+                df = pd.read_sql_query(f"SELECT * FROM {table} LIMIT {limit};", conn)
                 print(df)
 
         except Exception as e:
-            print("Error reading rows:", e)
+            print(f"Error reading table {table}: {e}")
 
     conn.close()

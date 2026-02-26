@@ -20,8 +20,13 @@ dependencies = [
     "pandas>=1.5",
     "scikit-learn>=1.2",
     "umap-learn",
-    "trimap",
+    "trimap==1.1.5",
     "pacmap",
+    "python-igraph",
+    "hnswlib",
+    "hdbscan",
+    "leidenalg",
+    "scipy",
 ]
 
 [project.scripts]

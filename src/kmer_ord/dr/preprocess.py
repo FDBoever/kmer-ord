@@ -1,13 +1,4 @@
 # src/kmer_ord/dr/preprocess.py
-
-import numpy as np
-import pandas as pd
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
-
-
-# src/kmer_ord/dr/preprocess.py
-
 import numpy as np
 import pandas as pd
 from sklearn.decomposition import PCA
@@ -50,11 +41,9 @@ def preprocess_data(df: pd.DataFrame, method: str) -> pd.DataFrame:
         raise ValueError(f"Unknown normalization method: {method}")
 
 
-def reduce_dimensions_with_pca(
-    df: pd.DataFrame,
-    keep_pcs: int | None = None,
-    keep_variance: float | None = None
-) -> pd.DataFrame:
+def reduce_dimensions_with_pca(df: pd.DataFrame,
+                               keep_pcs: int | None = None,
+                               keep_variance: float | None = None) -> pd.DataFrame:
     """
     Apply PCA reduction to a DataFrame either by fixed number of PCs
     or by cumulative variance threshold. Returns DataFrame with sample IDs as index.

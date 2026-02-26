@@ -83,10 +83,13 @@ from kmer_ord.dr.loader import load_matrix
 from kmer_ord.dr.preprocess import preprocess_data, reduce_dimensions_with_pca
 from kmer_ord.dr.methods import run_dr_methods
 
+
+GRAPH_METHODS = {"umap", "trimap", "pacmap", "localmap"}  # DR methods that produce a graph
+
 class DimensionalityReduction(Operation):
     name = "dimensionality_reduction"
     requires = ["kmer_matrix"]
-    produces = ["dr_embeddings"]
+    produces = ["dr_embeddings", "dr_graph"]
 
     def __init__(
         self,
@@ -119,14 +122,14 @@ class DimensionalityReduction(Operation):
         dr_dir.mkdir(parents=True, exist_ok=True)
 
         matrix = load_matrix(matrix_path)
+        # obtain sequence ids
+        sequence_ids = matrix.index.tolist()
 
         # Expand normalisations if needed
-        if "all" in self.normalisations:
-            normalisations = ALL_NORMALISATIONS
-        else:
-            normalisations = self.normalisations
+        normalisations = self.normalisations if "all" not in self.normalisations else ALL_METHODS
 
         merged_outputs = []
+        graph_paths = []
 
         with BenchmarkTimer(label=self.name, input_file=matrix_path):
 
@@ -137,36 +140,32 @@ class DimensionalityReduction(Operation):
             if self.max_memory_gb and est_peak > self.max_memory_gb:
                 raise MemoryError(
                     f"Estimated peak {est_peak:.2f} GB exceeds "
-                    f"limit {self.max_memory_gb:.2f} GB"
-                )
+                    f"limit {self.max_memory_gb:.2f} GB")
 
             for norm in normalisations:
 
                 context.logger.info(f"Applying normalisation: {norm}")
 
-                merged_output = (
-                    dr_dir /
-                    f"{matrix_path.stem}_{norm}_merged_embeddings.tsv"
-                )
+                merged_output = dr_dir / f"{matrix_path.stem}_{norm}_merged_embeddings.tsv"
 
                 # Skip per-normalisation if exists
                 if merged_output.exists() and not context.force:
-                    context.logger.info(
-                        f"Skipping DR for '{norm}', merged file exists."
-                    )
+                    context.logger.info(f"Skipping DR for '{norm}', merged file exists.")
                     merged_outputs.append(merged_output)
+                    # Check if graph exists already
+                    graph_file = dr_dir / f"{matrix_path.stem}_{norm}_graph.npz"
+                    if graph_file.exists():
+                        graph_paths.append(graph_file)
                     continue
 
                 X = preprocess_data(matrix, norm)
 
                 if self.pca_dim_red:
                     X = reduce_dimensions_with_pca(
-                        X,
-                        keep_pcs=self.keep_pcs,
-                        keep_variance=self.keep_variance
-                    )
+                        X, keep_pcs=self.keep_pcs,
+                        keep_variance=self.keep_variance)
 
-                # This now merges only across methods
+                # Run DR methods and merge embeddings
                 merged_file = run_dr_methods(
                     X=X,
                     methods=self.methods,
@@ -176,13 +175,37 @@ class DimensionalityReduction(Operation):
                     screen_params=self.screen_params,
                     output_dir=dr_dir,
                     normalisation=norm,
-                    input_name=matrix_path.stem
-                )
+                    input_name=matrix_path.stem,
+                    sequence_ids=sequence_ids)
 
                 merged_outputs.append(merged_file)
 
-        # Register ALL per-normalisation merged outputs
+                # Attempt to save graph only for supported methods
+                import scipy.sparse as sparse
+                for method in self.methods:
+                    if method.lower() in GRAPH_METHODS:
+                        try:
+                            # Load method-specific embedding file
+                            method_file = dr_dir / norm / method / f"{matrix_path.stem}_{norm}_{method}_{self.dims}D.tsv"
+                            # Only UMAP currently exposes graph attribute
+                            if method.lower() == "umap":
+                                import umap
+                                # Re-run UMAP here for graph extraction
+                                reducer = umap.UMAP(n_components=self.dims, random_state=self.seed)
+                                reducer.fit(X)
+                                graph = reducer.graph_  # sparse CSR
+                                graph_path = dr_dir / f"{matrix_path.stem}_{norm}_graph.npz"
+                                sparse.save_npz(graph_path, graph)
+                                graph_paths.append(graph_path)
+                                context.logger.info(f"Saved UMAP graph for {norm} at {graph_path}")
+                        except Exception as e:
+                            context.logger.warning(f"Could not extract graph from {method}: {e}")
+
+        # Register outputs
         context.register("dr_embeddings", merged_outputs)
+        if graph_paths:
+            context.register("dr_graph", graph_paths)
+
 
 from kmer_ord.io.kmer_stats import process_kmer_file
 
@@ -210,8 +233,7 @@ class KmerMetrics(Operation):
                     input_file=matrix_path,
                     output_file=output_file,
                     chunksize=self.chunksize,
-                    cpus=self.cpus
-                )
+                    cpus=self.cpus)
 
         context.register("kmer_metrics", output_file)
 
@@ -227,27 +249,22 @@ class Tiara(Operation):
     def run(self, context):
         input_fasta = context.get("fasta")
 
-        output_file = context.artifact_path(
-            name="tiara",
-            subdir="tiara",
-            suffix=".tsv"
-        )
+        output_file = context.artifact_path(name="tiara",
+                                            subdir="tiara",
+                                            suffix=".tsv")
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
         with BenchmarkTimer(
             label=self.name,
             input_file=input_fasta,
-            input_args=f"threads={self.threads}"
-        ):
+            input_args=f"threads={self.threads}"):
             if output_file.exists() and not context.force:
                 typer.echo(f"Skipping Tiara, output exists: {output_file}")
                 context.logger.info(f"Skipping Tiara, output exists: {output_file}")
             else:
-                run_tiara(
-                    input_file=input_fasta,
-                    output_file=output_file,
-                    threads=self.threads
-                )
+                run_tiara(input_file=input_fasta,
+                          output_file=output_file,
+                          threads=self.threads)
 
         context.register("tiara", output_file)
 
@@ -302,6 +319,7 @@ from kmer_ord.io.database import (initialize_spatialite_db,
                                   create_coordinates_table,
                                   populate_coordinates_table,
                                   inspect_database)
+from kmer_ord.io import database 
 
 class SpatialiteDatabase(Operation):
     name = "spatialite-db"
@@ -333,14 +351,10 @@ class SpatialiteDatabase(Operation):
         features_df = pd.read_csv(features_path, sep="\t")
 
         if "sequence_id" not in features_df.columns:
-            raise RuntimeError(
-                "merged_features.tsv must contain a 'sequence_id' column."
-            )
+            raise RuntimeError("merged_features.tsv must contain a 'sequence_id' column.")
 
         if features_df["sequence_id"].duplicated().any():
-            raise RuntimeError(
-                "Duplicate sequence_id detected in merged_features."
-            )
+            raise RuntimeError("Duplicate sequence_id detected in merged_features.")
 
         create_features_table(conn, features_df)
         populate_features_table(conn, features_df)
@@ -353,9 +367,9 @@ class SpatialiteDatabase(Operation):
             coords_df = pd.read_csv(emb_file, sep="\t")
 
             # Inject sequence_id from features table (order must match)
-            features_path = context.get("merged_features")
-            features_df = pd.read_csv(features_path, sep="\t")
-            coords_df.insert(0, "sequence_id", features_df["sequence_id"].values)
+            #features_path = context.get("merged_features")
+            #features_df = pd.read_csv(features_path, sep="\t")
+            #coords_df.insert(0, "sequence_id", features_df["sequence_id"].values)
         
         methods = create_coordinates_table(conn, coords_df)
         populate_coordinates_table(conn, coords_df, methods)
@@ -363,3 +377,188 @@ class SpatialiteDatabase(Operation):
         conn.close()
         context.register("database", output_path)
         inspect_database(output_path)
+
+from kmer_ord.cluster.graph import build_knn_graph
+from kmer_ord.cluster.leiden import run_leiden, leiden_resolution_sweep
+from kmer_ord.cluster.hdbscan import run_hdbscan
+from kmer_ord.cluster.dbscan import run_dbscan
+
+class Clustering(Operation):
+    name = "clustering"
+    requires = ["dr_embeddings"]
+    produces = ["clusters"]
+
+    # Hardcoded sweep grids
+    LEIDEN_RESOLUTIONS = [
+        0.001, 0.0025, 0.005, 0.0075,
+        0.01, 0.025, 0.05, 0.075,
+        0.1, 0.25, 0.5, 0.75,
+        1.0, 2.5, 5.0
+    ]
+
+    DBSCAN_EPS = [
+        0.01, 0.025, 0.05, 0.075,
+        0.1, 0.25, 0.5, 0.75,
+        1.0, 2.5, 5.0
+    ]
+
+    HDBSCAN_MCS = [5, 10, 15, 25, 50, 75, 100]
+
+    def __init__(
+        self,
+        method="leiden",
+        sweep=False,
+        knn=15,
+        seed=42,
+        min_samples=5,
+        min_cluster_size=10,
+        eps=0.5,
+    ):
+        self.method = method
+        self.sweep = sweep
+        self.knn = knn
+        self.seed = seed
+        self.min_samples = min_samples
+        self.min_cluster_size = min_cluster_size
+        self.eps = eps
+
+    def run(self, context):
+
+        embedding_files = context.get("dr_embeddings")
+        if not isinstance(embedding_files, list):
+            embedding_files = [embedding_files]
+
+        cluster_outputs = []
+
+        for emb_path in embedding_files:
+
+            emb_path = Path(emb_path)
+            embedding_name = emb_path.stem
+
+            output_file = context.artifact_path(
+                name=f"{embedding_name}_{self.method}_clusters",
+                subdir="clusters",
+                suffix=".tsv"
+            )
+
+            if output_file.exists() and not context.force:
+                context.logger.info(f"Skipping clustering, exists: {output_file}")
+                cluster_outputs.append(output_file)
+                continue
+
+            df = pd.read_csv(emb_path, sep="\t")
+            sequence_ids = df["sequence_id"]
+            X = df.drop(columns=["sequence_id"]).values
+
+            cluster_df = pd.DataFrame({"sequence_id": sequence_ids})
+
+            # ---------------------------------------------------------
+            # LEIDEN
+            # ---------------------------------------------------------
+            if self.method == "leiden":
+
+                A = build_knn_graph(X, k=self.knn)
+
+                if self.sweep:
+                    results = leiden_resolution_sweep(
+                        A,
+                        resolutions=self.LEIDEN_RESOLUTIONS,
+                        seed=self.seed
+                    )
+
+                    for r, (labels, modularity) in results.items():
+                        cluster_df[f"leiden_r{r:.4f}"] = labels
+                else:
+                    labels, modularity = run_leiden(
+                        A,
+                        resolution=1.0,
+                        seed=self.seed
+                    )
+                    cluster_df["leiden"] = labels
+
+            # ---------------------------------------------------------
+            # HDBSCAN
+            # ---------------------------------------------------------
+            elif self.method == "hdbscan":
+
+                if self.sweep:
+                    for mcs in self.HDBSCAN_MCS:
+                        labels = run_hdbscan(
+                            X,
+                            min_cluster_size=mcs,
+                            min_samples=self.min_samples
+                        )
+                        cluster_df[f"hdbscan_mcs{mcs}"] = labels
+                else:
+                    labels = run_hdbscan(
+                        X,
+                        min_cluster_size=self.min_cluster_size,
+                        min_samples=self.min_samples
+                    )
+                    cluster_df["hdbscan"] = labels
+
+            # ---------------------------------------------------------
+            # DBSCAN
+            # ---------------------------------------------------------
+            elif self.method == "dbscan":
+
+                if self.sweep:
+                    for eps in self.DBSCAN_EPS:
+                        labels = run_dbscan(
+                            X,
+                            eps=eps,
+                            min_samples=self.min_samples
+                        )
+                        cluster_df[f"dbscan_eps{eps:.3f}"] = labels
+                else:
+                    labels = run_dbscan(
+                        X,
+                        eps=self.eps,
+                        min_samples=self.min_samples
+                    )
+                    cluster_df["dbscan"] = labels
+
+            else:
+                raise ValueError(f"Unknown clustering method: {self.method}")
+
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            cluster_df.to_csv(output_file, sep="\t", index=False)
+            cluster_outputs.append(output_file)
+
+        # ---------------------------------------------------------
+        # SAFE artifact registration (fixes your NameError issue)
+        # ---------------------------------------------------------
+        existing = context.artifacts.get("clusters", [])
+        if not isinstance(existing, list):
+            existing = [existing]
+
+        context.register("clusters", existing + cluster_outputs)
+
+
+class AddClusteringToDB(Operation):
+    name = "add_clustering_to_db"
+    requires = ["dr_embeddings", "clusters"]
+    produces = ["database"]
+
+    def __init__(self, db_path: Path, force: bool = False):
+        self.db_path = db_path
+        self.force = force
+
+    def run(self, context):
+        embedding_files = context.get("dr_embeddings")
+        cluster_files = context.get("clusters")
+
+        if not isinstance(embedding_files, list):
+            embedding_files = [embedding_files]
+        if not isinstance(cluster_files, list):
+            cluster_files = [cluster_files]
+
+        database.add_dr_and_clusters_to_db(
+            db_path=self.db_path,
+            embedding_files=embedding_files,
+            cluster_files=cluster_files,
+            force=self.force
+        )
+
+        context.register("database", self.db_path)
+        inspect_database(self.db_path)
