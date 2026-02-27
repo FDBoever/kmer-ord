@@ -16,7 +16,8 @@ app.add_typer(setup_app)
 # -----------------------------
 # Pipeline
 # -----------------------------
-@app.command("run", rich_help_panel="Pipeline")
+#@app.command("ordinate", rich_help_panel="Pipeline")
+@app.command("project", rich_help_panel="Pipeline")
 def run_pipeline(
     input: Path = typer.Option(..., "-i","--input", help="Input fasta/fastq file (can be gzipped)"),
     output_dir: Path = typer.Option(..., "-o","--output", help="Output directory"),
@@ -35,8 +36,12 @@ def run_pipeline(
     screen_params: bool = typer.Option(False, "--screen_params", help="Run parameter screening for supported DR methods"),
 ):
     """
-    Run the full kmer-ord pipeline:
-    fastq -> fasta -> sequence stats -> kmer-counting -> DR
+    [+] Projection pipeline:
+    Convert sequences (FASTQ/FASTA) into k-mer feature space,
+    compute sequence-level metrics, and generate a low-dimensional
+    (2D/3D) embedding that captures geometric relationships in k-mer space.
+    Results are stored in the database for dowstream exploration and annotation.
+    | fastq -> fasta -> sequence stats -> kmer-counting -> DR -> database |
     """
     print("-" * 70)
     section("Starting kmer-ord...")
@@ -85,7 +90,7 @@ def run_pipeline(
     print("-" * 70)
 
  
-@app.command("discover", rich_help_panel="Pipeline")
+@app.command("cluster", rich_help_panel="Pipeline")
 def discover_pipeline(
     input: Path = typer.Option(..., "-i", "--input", help="Input fasta/fastq file"),
     output_dir: Path = typer.Option(..., "-o", "--output", help="Output directory"),
@@ -102,8 +107,12 @@ def discover_pipeline(
     force: bool = typer.Option(False, "-f", "--force"),
     db_path: Path = typer.Option(None, "--db", help="Optional path to existing SQLite/SpatiaLite DB"),):
     """
-    Structure discovery pipeline:
-    High-D embedding + clustering + database integration.
+    [+] Cluster inference pipeline :
+    Construct a high-dimensional embedding of k-mer feature space
+    and perform unsupervised clustering to infer intrinsic structure 
+    among sequences. Embeddings and cluster assignments are 
+    integrated into the database for downstream analysis.
+    | kmer-profiles -> High-D embedding -> clustering -> database |
     """
 
     from kmer_ord.workflow.operations import (
@@ -184,78 +193,9 @@ def discover_pipeline(
     section(f"Discovery complete. Database saved at: {db_path}")
 
 
-@app.command("embed", rich_help_panel="Modeling")
-def embed_pipeline(
-    input: Path = typer.Option(..., "-i", "--input"),
-    output_dir: Path = typer.Option(..., "-o", "--output"),
-    kmer_length: int = typer.Option(6, "-k", "--kmer"),
-    dims: int = typer.Option(20, "-d", "--dims"),
-    dr_method: str = typer.Option("umap", "--dr"),
-    norm: str = typer.Option("clr", "--norm"),
-    threads: int = typer.Option(4, "-t", "--threads"),
-    force: bool = typer.Option(False, "-f", "--force")):
-    """
-    Generate high-dimensional embedding only.
-    """
-
-    from kmer_ord.workflow.operations import (
-        FastqToFasta,
-        FastaStats,
-        KmerCount,
-        KmerMetrics,
-        DimensionalityReduction)
-
-    context = Context(input, output_dir, force=force)
-
-    operations = [
-        FastqToFasta(),
-        FastaStats(),
-        KmerCount(kmer_length=kmer_length, threads=threads),
-        KmerMetrics(),
-        DimensionalityReduction(
-            methods=[dr_method],
-            normalisations=[norm],
-            dims=dims,
-        ),
-    ]
-
-    runner = Runner(operations)
-    runner.run(context)
-
-    info("Embedding complete.")
-
-
-@app.command("cluster", rich_help_panel="Modeling")
-def cluster_pipeline(
-    input: Path = typer.Option(..., "-i", "--input", help="Input directory containing artifacts"),
-    output_dir: Path = typer.Option(..., "-o", "--output"),
-    method: str = typer.Option("hdbscan", "--method"),
-    force: bool = typer.Option(False, "-f", "--force"),
-):
-    """
-    Cluster sequences using existing embedding.
-    """
-
-    from kmer_ord.workflow.operations import (
-        Clustering,
-        SpatialiteDatabase,
-    )
-
-    context = Context(input, output_dir, force=force)
-
-    operations = [
-        Clustering(method=method),
-        SpatialiteDatabase(),
-    ]
-
-    runner = Runner(operations)
-    runner.run(context)
-
-    info("Clustering complete.")
-
 # -----------------------------
 # fastq to fasta
-@app.command("fastq-to-fasta")
+@app.command("fastq-to-fasta", rich_help_panel="Modules")
 def fastq_to_fasta_cmd(
     input: Path = typer.Option(..., "-i","--input", help="Input fastq file (can be gzipped)"),
     output: Path = typer.Option(..., "-o","--output", help="Output fasta file"),
@@ -275,7 +215,7 @@ def fastq_to_fasta_cmd(
 
 # -----------------------------
 # FASTA stats
-@app.command("fasta-stats")
+@app.command("fasta-stats", rich_help_panel="Modules")
 def fasta_stats_cmd(
     input: Path = typer.Option(..., "-i","--input", help="Input fasta file"),
     output_dir: Path = typer.Option(..., "-o","--output", help="Output directory"),
@@ -295,7 +235,7 @@ def fasta_stats_cmd(
 
 # -----------------------------
 # K-mer counting
-@app.command("kmer-count")
+@app.command("kmer-count", rich_help_panel="Modules")
 def kmer_count_cmd(
     input: Path = typer.Option(..., "-i","--input", help="Input fasta file"),
     output_dir: Path = typer.Option(..., "-o","--output", help="Output directory"),
@@ -319,7 +259,7 @@ if __name__ == "__main__":
 
 # -----------------------------
 # kmer-metrics
-@app.command("kmer-metrics")
+@app.command("kmer-metrics", rich_help_panel="Modules")
 def kmer_metrics_cmd(
     input: Path = typer.Option(..., "-i", "--input",help="Input k-mer matrix TSV"),
     output_dir: Path = typer.Option(..., "-o","--output", help="Output directory"),
@@ -339,7 +279,7 @@ def kmer_metrics_cmd(
 
 # -----------------------------
 # DR
-@app.command("dr")
+@app.command("dr", rich_help_panel="Modules")
 def dr_cmd(
     input: Path = typer.Option(..., "-i","--input", help="Input k-mer matrix tsv"),
     output_dir: Path = typer.Option(..., "-o","--output", help="Output directory"),
@@ -378,7 +318,36 @@ def dr_cmd(
     info(f"DR embeddings saved at: {context.get('dr_embeddings')}")
 
 
-@app.command("run-tiara")
+@app.command("clustering", rich_help_panel="Modules")
+def cluster_pipeline(
+    input: Path = typer.Option(..., "-i", "--input", help="Input directory containing artifacts"),
+    output_dir: Path = typer.Option(..., "-o", "--output"),
+    method: str = typer.Option("hdbscan", "--method"),
+    force: bool = typer.Option(False, "-f", "--force"),
+):
+    """
+    Cluster sequences using existing embedding.
+    """
+
+    from kmer_ord.workflow.operations import (
+        Clustering,
+        SpatialiteDatabase,
+    )
+
+    context = Context(input, output_dir, force=force)
+
+    operations = [
+        Clustering(method=method),
+        SpatialiteDatabase(),
+    ]
+
+    runner = Runner(operations)
+    runner.run(context)
+
+    info("Clustering complete.")
+ 
+
+@app.command("run-tiara", rich_help_panel="Modules")
 def run_tiara_cmd(
     input: Path = typer.Option(..., "-i","--input", help="Input fasta file"),
     output_dir: Path = typer.Option(..., "-o","--output", help="Output directory"),
@@ -397,7 +366,7 @@ def run_tiara_cmd(
     info(f"Tiara output saved at: {context.get('tiara')}")
 
 
-@app.command("build-db")
+@app.command("build-db", rich_help_panel="Modules")
 def build_database(
     input: Path = typer.Option(..., "-i", "--input", help="Input directory containing artifacts"),
     output_dir: Path = typer.Option(..., "-o","--output", help="Output directory for database"),

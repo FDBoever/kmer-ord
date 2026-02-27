@@ -6,7 +6,7 @@ import typer
 setup_app = typer.Typer(help="Setup external dependencies for kmerord.")
 
 
-@setup_app.command("setup")
+@setup_app.command("setup", rich_help_panel="Installation")
 def setup(
     force: bool = typer.Option(False, "-f","--force", help="Recreate environments even if they already exist.")):
     """
