@@ -1,3 +1,4 @@
+from os import name
 from pathlib import Path
 import sqlite3
 from sqlite3 import OperationalError
@@ -311,17 +312,33 @@ def inspect_database(db_file: Path, limit: int = 5):
         pass
 
     # Query all user tables
-    cursor.execute("""
-        SELECT name 
-        FROM sqlite_master 
-        WHERE type='table';
-    """)
+    cursor.execute("""SELECT name FROM sqlite_master WHERE type='table';""")
     tables = [row[0] for row in cursor.fetchall()]
 
     if not tables:
         print("No tables found in database.")
         conn.close()
         return
+    
+    SYSTEM_PREFIXES = ("sqlite_",
+                       "idx_",
+                       "geometry_",
+                       "spatial_ref_",
+                       "virts_",
+                       "views_")
+
+    SYSTEM_TABLES = {"data_licenses",
+                     "sql_statements_log",
+                     "SpatialIndex",
+                     "spatial_ref_sys",
+                     "KNN2",
+                     "geometry_columns",
+                     "spatialite_history",
+                     "ElementaryGeometries"}
+
+    tables = [t for t in tables
+              if not t.startswith(SYSTEM_PREFIXES)
+              and t not in SYSTEM_TABLES]
 
     for table in tables:
         print(f"\n--- TABLE: {table} ---")
@@ -336,11 +353,7 @@ def inspect_database(db_file: Path, limit: int = 5):
         try:
             # Special handling for coordinates (geometry columns)
             if table == "coordinates":
-                geom_query = """
-                    SELECT f_geometry_column
-                    FROM geometry_columns
-                    WHERE f_table_name = 'coordinates';
-                """
+                geom_query = """SELECT f_geometry_column FROM geometry_columns WHERE f_table_name = 'coordinates';"""
                 geom_cols = pd.read_sql_query(geom_query, conn)
 
                 if geom_cols.empty:
@@ -355,11 +368,7 @@ def inspect_database(db_file: Path, limit: int = 5):
                     select_parts.append(f"ST_Y({col}) AS {col}_2")
                     select_parts.append(f"ST_Z({col}) AS {col}_3")
 
-                select_sql = f"""
-                    SELECT {', '.join(select_parts)}
-                    FROM coordinates
-                    LIMIT {limit};
-                """
+                select_sql = f"""SELECT {', '.join(select_parts)} FROM coordinates LIMIT {limit};"""
                 df = pd.read_sql_query(select_sql, conn)
                 df = df.dropna(axis=1, how="all")
                 print(df)

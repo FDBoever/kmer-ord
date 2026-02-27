@@ -44,8 +44,8 @@ def run_pipeline(
     | fastq -> fasta -> sequence stats -> kmer-counting -> DR -> database |
     """
     print("-" * 70)
-    section("Starting kmer-ord...")
-    info("importing packages...")
+    section("Starting kmer-ord projection pipeline...")
+    info("loading packages")
     from kmer_ord.io.sequence import fastq_to_fasta
     from kmer_ord.io.summary import calculate_stats
     from kmer_ord.workflow.operations import (
@@ -114,7 +114,9 @@ def discover_pipeline(
     integrated into the database for downstream analysis.
     | kmer-profiles -> High-D embedding -> clustering -> database |
     """
-
+    print("-" * 70)
+    section("Starting kmer-ord clustering pipeline...")
+    info("loading packages")
     from kmer_ord.workflow.operations import (
         FastqToFasta,
         FastaStats,
@@ -124,8 +126,6 @@ def discover_pipeline(
         Clustering,
         AddClusteringToDB,
     )
-
-    section("Starting structure discovery...")
 
     context = Context(input, output_dir, force=force)
 
@@ -191,6 +191,22 @@ def discover_pipeline(
     add_db_op.run(context)
 
     section(f"Discovery complete. Database saved at: {db_path}")
+
+    # print all artifacts 
+    print("\n")
+    print("-" * 70)
+    typer.echo("Generated output:")
+    for name, path in context.artifacts.items():
+        if isinstance(path, list):
+            typer.echo(f"  {name}:")
+            for p in path:
+                typer.echo(f"    - {p}")
+        else:
+            typer.echo(f"  {name}: {path}")
+    print("-" * 70)
+    section("Done.")
+    print("-" * 70)
+
 
 
 # -----------------------------
