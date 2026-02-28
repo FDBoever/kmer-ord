@@ -3,7 +3,7 @@
 from pathlib import Path
 import pandas as pd
 import numpy as np
-
+import scipy.sparse as sparse
 from sklearn.decomposition import PCA, KernelPCA, SparsePCA
 from sklearn.manifold import TSNE, Isomap, LocallyLinearEmbedding
 
@@ -61,74 +61,110 @@ DR_HYPERPARAMS = {
 ALL_METHODS = list(DR_HYPERPARAMS.keys())
 
 
-def _run_single_method(X: np.ndarray, method: str, dims: int, seed: int,scale: str = "default",):
+def _run_single_method(
+    X: np.ndarray,
+    method: str,
+    dims: int,
+    seed: int,
+    scale: str = "default",
+):
+
     method = method.lower()
     params = DR_HYPERPARAMS.get(method, {}).get(scale, {})
-    
+    graph = None
+
     if method == "pca":
+        from sklearn.decomposition import PCA
         model = PCA(n_components=dims, **params)
+        embedding = model.fit_transform(X)
+
     elif method == "tsne":
         from sklearn.manifold import TSNE
         model = TSNE(n_components=dims, random_state=seed, **params)
+        embedding = model.fit_transform(X)
+
     elif method == "umap":
         import umap
-        #model = umap.UMAP(n_components=dims, random_state=seed, **params)
-        model = umap.UMAP(n_components=dims, **params)
+        model = umap.UMAP(n_components=dims, random_state=seed, **params)
+        embedding = model.fit_transform(X)
+        graph = getattr(model, "graph_", None)
+
     elif method == "trimap":
         from trimap import TRIMAP
         model = TRIMAP(n_dims=dims, **params)
+        embedding = model.fit_transform(X)
+
     elif method == "pacmap":
         from pacmap import PaCMAP
         model = PaCMAP(n_components=dims, **params)
+        embedding = model.fit_transform(X)
+        graph = getattr(model, "graph_", None)
+
     elif method == "localmap":
         from pacmap.pacmap import LocalMAP
         model = LocalMAP(n_components=dims, **params)
+        embedding = model.fit_transform(X)
+        graph = getattr(model, "graph_", None)
+
     elif method == "lle":
         from sklearn.manifold import LocallyLinearEmbedding
         n_neighbors = params.get("n_neighbors", 10)
-        model = LocallyLinearEmbedding(n_neighbors=n_neighbors, n_components=dims)
+        model = LocallyLinearEmbedding(
+            n_neighbors=n_neighbors,
+            n_components=dims
+        )
+        embedding = model.fit_transform(X)
+
     elif method == "sparse_pca":
         from sklearn.decomposition import SparsePCA
-        model = SparsePCA(n_components=dims, **params)
+        model = SparsePCA(n_components=dims, random_state=seed, **params)
+        embedding = model.fit_transform(X)
+
     elif method == "kernel_pca":
         from sklearn.decomposition import KernelPCA
         model = KernelPCA(n_components=dims, **params)
+        embedding = model.fit_transform(X)
+
     else:
         raise ValueError(f"Unsupported DR method: {method}")
 
-    return model.fit_transform(X)
+    # ensure graph is sparse if present
+    if graph is not None and not sparse.issparse(graph):
+        graph = sparse.csr_matrix(graph)
+
+    return embedding, graph
 
 
-def run_dr_methods(X: np.ndarray | pd.DataFrame,
-                   methods: list[str],
-                   dims: int,
-                   seed: int,
-                   scale: str,
-                   screen_params: bool,
-                   output_dir: Path,
-                   normalisation: str,
-                   input_name: str,
-                   sequence_ids: list | pd.Index | None = None) -> Path:
+def run_dr_methods(
+    X: np.ndarray | pd.DataFrame,
+    methods: list[str],
+    dims: int,
+    seed: int,
+    scale: str,
+    screen_params: bool,
+    output_dir: Path,
+    normalisation: str,
+    input_name: str,
+    sequence_ids: list | pd.Index | None = None,
+) -> tuple[Path, list[Path]]:
     """
     Run selected DR methods for a single normalisation.
 
     Adds sequence_id column to all embeddings for downstream merging.
-
-    Parameters
-    ----------
-    X : np.ndarray or pd.DataFrame
-        Feature matrix.
-    sequence_ids : list or pd.Index, optional
-        Sequence identifiers. Must match number of rows in X.
+    Saves graph objects if produced by a method.
 
     Returns
     -------
     merged_file : Path
         Path to merged embeddings file
+    graph_paths : list[Path]
+        List of graph files saved (may be empty)
     """
 
+    # -----------------------------
+    # Sequence IDs
+    # -----------------------------
     if sequence_ids is None:
-        # Use row index if X is DataFrame, else default numeric IDs
         if isinstance(X, pd.DataFrame):
             sequence_ids = X.index
         else:
@@ -138,14 +174,23 @@ def run_dr_methods(X: np.ndarray | pd.DataFrame,
         methods = ALL_METHODS
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    dfs = []
 
+    dfs = []
+    graph_paths: list[Path] = []
+
+    # -----------------------------
+    # Per-method execution
+    # -----------------------------
     for method in methods:
+
+        method = method.lower()
 
         method_dir = output_dir / normalisation / method
         method_dir.mkdir(parents=True, exist_ok=True)
 
-        # parameter screening
+        # -------------------------
+        # Parameter screening
+        # -------------------------
         if screen_params and method in SCREENABLE_METHODS:
             screen_dir = method_dir / "parameter_screen"
             screen_dir.mkdir(parents=True, exist_ok=True)
@@ -159,11 +204,13 @@ def run_dr_methods(X: np.ndarray | pd.DataFrame,
                 output_dir=screen_dir,
                 normalisation=normalisation,
                 input_name=input_name,
-                sequence_ids=sequence_ids,  # pass sequence IDs here too
+                sequence_ids=sequence_ids,
             )
 
+        # -------------------------
         # Default embedding
-        embedding = _run_single_method(
+        # -------------------------
+        embedding, graph = _run_single_method(
             X=X,
             method=method,
             dims=dims,
@@ -171,26 +218,37 @@ def run_dr_methods(X: np.ndarray | pd.DataFrame,
             scale=scale,
         )
 
+        # save embedding
         columns = [f"{method}_{i+1}" for i in range(dims)]
         df_embed = pd.DataFrame(embedding, columns=columns)
-        df_embed.insert(0, "sequence_id", sequence_ids)  # add sequence_id column
+        df_embed.insert(0, "sequence_id", sequence_ids)
 
-        out_file = method_dir / f"{input_name}_{normalisation}_{method}_{dims}D.tsv"
+        out_file = (method_dir / f"{input_name}_{normalisation}_{method}_{dims}D.tsv")
+
         df_embed.to_csv(out_file, sep="\t", index=False)
         print(f"Saved {method} ({normalisation}) > {out_file}")
 
         dfs.append(df_embed)
 
-    # merge across methods
+        # Save graph if available
+        if graph is not None:
+            graph_file = (method_dir / f"{input_name}_{normalisation}_{method}_graph.npz")
+
+            sparse.save_npz(graph_file, graph)
+            graph_paths.append(graph_file)
+
+    # Merge embeddings across methods
     merged_df = pd.concat(dfs, axis=1)
-    # Ensure only one sequence_id column
+
+    # ensure only one sequence_id column
     merged_df = merged_df.loc[:, ~merged_df.columns.duplicated()]
 
-    merged_file = output_dir / normalisation / f"{input_name}_{normalisation}_{dims}D_merged_embeddings.tsv"
+    merged_file = (output_dir / normalisation /f"{input_name}_{normalisation}_{dims}D_merged_embeddings.tsv")
+
     merged_df.to_csv(merged_file, sep="\t", index=False)
     print(f"Saved merged embeddings ({normalisation}) > {merged_file}")
 
-    return merged_file
+    return merged_file, graph_paths
 
 
 def _run_parameter_screen(

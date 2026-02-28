@@ -3,6 +3,7 @@ from pathlib import Path
 from kmer_ord.workflow import context
 import typer
 import pandas as pd
+import numpy as np
 import importlib.resources as pkg_resources
 
 from kmer_ord.io.summary import calculate_stats
@@ -83,33 +84,86 @@ from kmer_ord.dr.loader import load_matrix
 from kmer_ord.dr.preprocess import preprocess_data, reduce_dimensions_with_pca
 from kmer_ord.dr.methods import run_dr_methods
 
+## do the numpy np.save etc inside the function preprocess data?
+class MatrixPreprocessing(Operation):
+    name = "matrix_preprocessing"
+    requires = ["kmer_matrix"]
+    produces = ["preprocessed_matrices"]
 
-GRAPH_METHODS = {"umap", "trimap", "pacmap", "localmap"}  # DR methods that produce a graph
+    def __init__(
+        self,
+        normalisations=("clr",),
+        pca_dim_red=False,
+        keep_pcs=None,
+        keep_variance=None,
+        scale="auto",
+        max_memory_gb=None,
+):
+        self.normalisations = normalisations
+        self.pca_dim_red = pca_dim_red
+        self.keep_pcs = keep_pcs
+        self.keep_variance = keep_variance
+        self.scale = scale
+        self.max_memory_gb = max_memory_gb
+
+    def run(self, context):
+
+        matrix_path = context.get("kmer_matrix")
+        matrix = load_matrix(matrix_path)
+
+        output_dir = context.output_dir / "matrices"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        outputs = []
+
+        normalisations = (
+            self.normalisations
+            if "all" not in self.normalisations
+            else ALL_METHODS
+        )
+
+        for norm in normalisations:
+
+            out_path = output_dir / f"{matrix_path.stem}_{norm}.npy"
+
+            if out_path.exists() and not context.force:
+                outputs.append(out_path)
+                continue
+
+            X = preprocess_data(matrix, norm)
+
+            if self.pca_dim_red:
+                X = reduce_dimensions_with_pca(
+                    X,
+                    keep_pcs=self.keep_pcs,
+                    keep_variance=self.keep_variance,
+                )
+
+            np.save(out_path, X)
+            outputs.append(out_path)
+
+        context.register("preprocessed_matrices", outputs)
+
+
+
+#GRAPH_METHODS = {"umap", "trimap", "pacmap", "localmap"}  # DR methods that produce a graph
 
 class DimensionalityReduction(Operation):
     name = "dimensionality_reduction"
-    requires = ["kmer_matrix"]
+    requires = ["preprocessed_matrices"]
     produces = ["dr_embeddings", "dr_graph"]
 
     def __init__(
         self,
         methods,
-        normalisations=("clr",),
         dims=2,
-        pca_dim_red=False,
-        keep_pcs=None,
-        keep_variance=None,
         scale="auto",
         seed=42,
         screen_params=False,
-        max_memory_gb=None
+        max_memory_gb=None,
     ):
         self.methods = methods
-        self.normalisations = normalisations
         self.dims = dims
-        self.pca_dim_red = pca_dim_red
-        self.keep_pcs = keep_pcs
-        self.keep_variance = keep_variance
         self.scale = scale
         self.seed = seed
         self.screen_params = screen_params
@@ -117,94 +171,83 @@ class DimensionalityReduction(Operation):
 
     def run(self, context):
 
-        matrix_path = context.get("kmer_matrix")
+        matrix_paths = context.get("preprocessed_matrices")
         dr_dir = context.output_dir / "dr"
         dr_dir.mkdir(parents=True, exist_ok=True)
 
-        matrix = load_matrix(matrix_path)
-        # obtain sequence ids
-        sequence_ids = matrix.index.tolist()
-
-        # Expand normalisations if needed
-        normalisations = self.normalisations if "all" not in self.normalisations else ALL_METHODS
-
         merged_outputs = []
-        graph_paths = []
+        all_graph_paths = []
 
-        with BenchmarkTimer(label=self.name, input_file=matrix_path):
+        for matrix_path in matrix_paths:
 
-            # Memory safety check (only once)
-            base_mem_gb = matrix.memory_usage(deep=True).sum() / (1024 ** 3)
-            est_peak = base_mem_gb * 4.0
+            norm_label = matrix_path.stem.split("_")[-1]
+            input_name = "_".join(matrix_path.stem.split("_")[:-1])
 
-            if self.max_memory_gb and est_peak > self.max_memory_gb:
-                raise MemoryError(
-                    f"Estimated peak {est_peak:.2f} GB exceeds "
-                    f"limit {self.max_memory_gb:.2f} GB")
+            context.logger.info(f"Running DR for: {matrix_path.name}")
 
-            for norm in normalisations:
+            X = np.load(matrix_path)
 
-                context.logger.info(f"Applying normalisation: {norm}")
+            # -------------------------
+            # Memory check
+            # -------------------------
+            if self.max_memory_gb:
+                est_peak = X.nbytes * 4 / (1024 ** 3)
+                if est_peak > self.max_memory_gb:
+                    raise MemoryError(
+                        f"Estimated peak {est_peak:.2f} GB exceeds "
+                        f"limit {self.max_memory_gb:.2f} GB"
+                    )
 
-                merged_output = dr_dir / f"{matrix_path.stem}_{norm}_merged_embeddings.tsv"
+            # Expected merged output location
+            merged_output = (
+                dr_dir
+                / norm_label
+                / f"{input_name}_{norm_label}_{self.dims}D_merged_embeddings.tsv"
+            )
 
-                # Skip per-normalisation if exists
-                if merged_output.exists() and not context.force:
-                    context.logger.info(f"Skipping DR for '{norm}', merged file exists.")
-                    merged_outputs.append(merged_output)
-                    # Check if graph exists already
-                    graph_file = dr_dir / f"{matrix_path.stem}_{norm}_graph.npz"
-                    if graph_file.exists():
-                        graph_paths.append(graph_file)
-                    continue
+            # -------------------------
+            # Caching behaviour
+            # -------------------------
+            if merged_output.exists() and not context.force:
+                merged_outputs.append(merged_output)
 
-                X = preprocess_data(matrix, norm)
+                # collect any existing graphs under this normalisation
+                norm_dir = dr_dir / norm_label
+                if norm_dir.exists():
+                    for graph_file in norm_dir.rglob("*_graph.npz"):
+                        all_graph_paths.append(graph_file)
 
-                if self.pca_dim_red:
-                    X = reduce_dimensions_with_pca(
-                        X, keep_pcs=self.keep_pcs,
-                        keep_variance=self.keep_variance)
+                continue
 
-                # Run DR methods and merge embeddings
-                merged_file = run_dr_methods(
-                    X=X,
-                    methods=self.methods,
-                    dims=self.dims,
-                    seed=self.seed,
-                    scale=self.scale,
-                    screen_params=self.screen_params,
-                    output_dir=dr_dir,
-                    normalisation=norm,
-                    input_name=matrix_path.stem,
-                    sequence_ids=sequence_ids)
+            # -------------------------
+            # Run DR
+            # -------------------------
+            merged_file, graph_paths = run_dr_methods(
+                X=X,
+                methods=self.methods,
+                dims=self.dims,
+                seed=self.seed,
+                scale=self.scale,
+                screen_params=self.screen_params,
+                output_dir=dr_dir,
+                normalisation=norm_label,
+                input_name=input_name,
+                sequence_ids=None,
+            )
 
-                merged_outputs.append(merged_file)
+            merged_outputs.append(merged_file)
 
-                # Attempt to save graph only for supported methods
-                import scipy.sparse as sparse
-                for method in self.methods:
-                    if method.lower() in GRAPH_METHODS:
-                        try:
-                            # Load method-specific embedding file
-                            method_file = dr_dir / norm / method / f"{matrix_path.stem}_{norm}_{method}_{self.dims}D.tsv"
-                            # Only UMAP currently exposes graph attribute
-                            if method.lower() == "umap":
-                                import umap
-                                # Re-run UMAP here for graph extraction
-                                reducer = umap.UMAP(n_components=self.dims, random_state=self.seed)
-                                reducer.fit(X)
-                                graph = reducer.graph_  # sparse CSR
-                                graph_path = dr_dir / f"{matrix_path.stem}_{norm}_graph.npz"
-                                sparse.save_npz(graph_path, graph)
-                                graph_paths.append(graph_path)
-                                context.logger.info(f"Saved UMAP graph for {norm} at {graph_path}")
-                        except Exception as e:
-                            context.logger.warning(f"Could not extract graph from {method}: {e}")
+            if graph_paths:
+                all_graph_paths.extend(graph_paths)
 
+        # -------------------------
         # Register outputs
+        # -------------------------
         context.register("dr_embeddings", merged_outputs)
-        if graph_paths:
-            context.register("dr_graph", graph_paths)
+
+        if all_graph_paths:
+            context.register("dr_graph", all_graph_paths)
+
 
 
 from kmer_ord.io.kmer_stats import process_kmer_file

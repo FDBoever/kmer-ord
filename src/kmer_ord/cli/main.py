@@ -1,4 +1,6 @@
 # src/kmer_ord/cli/main.py
+from kmer_ord.workflow.operations import MatrixPreprocessing
+from kmer_ord.workflow.operations import MatrixPreprocessing
 import typer
 from pathlib import Path
 from kmer_ord.workflow import context
@@ -63,11 +65,23 @@ def run_pipeline(
         KmerCount(kmer_length=kmer_length, threads=threads),
         KmerMetrics(chunksize=1000, cpus=threads),
         Tiara(threads=threads),
-        DimensionalityReduction(methods=method_list, normalisations=norm_list,
-                                dims=dims, pca_dim_red=pca_pre, 
-                                keep_pcs=keep_pcs, keep_variance=keep_variance,
-                                screen_params=screen_params, 
-                                scale=scale),
+        #DimensionalityReduction(methods=method_list, normalisations=norm_list,
+        #                        dims=dims, pca_dim_red=pca_pre, 
+        #                        keep_pcs=keep_pcs, keep_variance=keep_variance,
+        #                        screen_params=screen_params, 
+        #                        scale=scale),
+        MatrixPreprocessing(
+            normalisations=norm_list,
+            pca_dim_red=pca_pre,
+            keep_pcs=keep_pcs,
+            keep_variance=keep_variance,
+            scale=scale),
+        DimensionalityReduction(
+            methods=method_list,
+            dims=dims,
+            scale=scale,
+            #seed=seed,
+            screen_params=screen_params,),
         FeatureMerge(),
         SpatialiteDatabase()]
 
@@ -98,7 +112,12 @@ def discover_pipeline(
     dims: int = typer.Option(15, "-d", "--dims", help="High-dimensional embedding size"),
     dr_method: str = typer.Option("umap", "--dr"),
     scale: str = typer.Option("auto", "-s","--scale", help="Dataset scale presets for DR hyperparameters (auto, small, medium, large, default)"),
-    norm: str = typer.Option("clr", "--norm"),
+    normalisation: str = typer.Option("clr", "--norm"),
+    pca_pre: bool = typer.Option(False, "--pca-pre", help="Apply PCA before DR"),
+    keep_pcs: int = typer.Option(None,"--keep-pcs", help="Number of principal components to retain"),
+    keep_variance: float = typer.Option(None,"--keep-variance",help="Variance threshold for PCA (e.g. 0.9)"),
+    screen_params: bool = typer.Option(False, "--screen_params", help="Run parameter screening for supported DR methods"),
+
     cluster_methods: str = typer.Option("hdbscan", "--cluster", help="Comma-separated clustering methods (leiden,hdbscan,dbscan)"),
     leiden_sweep: bool = typer.Option(False, "--leiden-sweep", help="Run Leiden resolution sweep"),
     hdbscan_sweep: bool = typer.Option(False, "--hdbscan-sweep", help="Run HDBSCAN min_cluster_size sweep"),
@@ -130,6 +149,8 @@ def discover_pipeline(
     context = Context(input, output_dir, force=force)
 
     cluster_list = [c.strip().lower() for c in cluster_methods.split(",")]
+    norm_list = [n.strip().lower() for n in normalisation.split(",")]
+    method_list = [m.strip().lower() for m in dr_method.split(",")]
 
     # -----------------------------
     # Core operations
@@ -139,11 +160,18 @@ def discover_pipeline(
         FastaStats(),
         KmerCount(kmer_length=kmer_length, threads=threads),
         KmerMetrics(),
+        MatrixPreprocessing(
+            normalisations=norm_list,
+            pca_dim_red=pca_pre,
+            keep_pcs=keep_pcs,
+            keep_variance=keep_variance,
+            scale=scale),
         DimensionalityReduction(
-            methods=[dr_method],
-            normalisations=[norm],
-            dims=dims, scale=scale,
-        ),
+            methods=method_list,
+            dims=dims,
+            scale=scale,
+            #seed=seed,
+            screen_params=screen_params,),
     ]
 
     # -----------------------------
