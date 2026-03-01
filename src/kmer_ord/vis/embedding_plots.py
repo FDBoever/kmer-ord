@@ -7,13 +7,10 @@ import numpy as np
 
 import datashader as ds
 import datashader.transfer_functions as tf
-import datashader.colors as dc
-
-from colorcet import fire, CET_L17
 from datashader.utils import export_image
+from colorcet import fire, CET_L17
 from PIL import Image, ImageDraw, ImageFont
 
-from kmer_ord.dr import methods
 from kmer_ord.utils.logging_utils import section, info, warn
 
 def _connect_spatialite(db_path: Path):
