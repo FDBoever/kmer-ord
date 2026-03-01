@@ -11,16 +11,12 @@ import datashader.colors as dc
 
 from colorcet import fire, CET_L17
 from datashader.utils import export_image
-from colorcet import glasbey
 from PIL import Image, ImageDraw, ImageFont
 
 from kmer_ord.dr import methods
 from kmer_ord.utils.logging_utils import section, info, warn
 
 def _connect_spatialite(db_path: Path):
-    """
-    Open SQLite connection and load SpatiaLite extension.
-    """
     conn = sqlite3.connect(str(db_path))
     conn.enable_load_extension(True)
 
@@ -40,7 +36,6 @@ def _connect_spatialite(db_path: Path):
 
 
 def plot_embeddings_from_db(db_path: Path, output_root: Path, mode: str = "all"):
-
     conn = _connect_spatialite(db_path)
     methods = _discover_geometry_methods(conn)
     if not methods:
@@ -94,9 +89,6 @@ def plot_embeddings_from_db(db_path: Path, output_root: Path, mode: str = "all")
 
 
 def _discover_geometry_methods(conn):
-    """
-    Discover geometry columns in Spatialite 'coordinates' table.
-    """
     query = """
         SELECT f_geometry_column
         FROM geometry_columns
@@ -111,9 +103,6 @@ def _discover_geometry_methods(conn):
     return df["f_geometry_column"].tolist()
 
 def _extract_method_coordinates(conn, method):
-    """
-    Extract X/Y from Spatialite geometry column along with sequence_id.
-    """
     select_sql = f"""
         SELECT
             sequence_id,
@@ -140,14 +129,9 @@ def _load_clusters(conn):
 
 
 def _merge_tables(emb_df, features_df, cluster_df=None):
-    """
-    Merge embedding coordinates with features (and optional clusters) using sequence_id.
-    """
     df = emb_df.copy()
-    
     if features_df is not None:
-        df = df.merge(features_df, on="sequence_id", how="left")
-    
+        df = df.merge(features_df, on="sequence_id", how="left") 
     if cluster_df is not None:
         df = df.merge(cluster_df, on="sequence_id", how="left")
     
@@ -174,79 +158,6 @@ def _render_density(df, xcol, ycol, outdir, method):
     img = tf.dynspread(img)
 
     export_image(img, filename=f"{method}_density", export_path=str(outdir))
-
-
-def _render_categorical_columns(df, xcol, ycol, outdir, method):
-    categorical_cols = [
-        c for c in df.columns
-        if c not in ("header", "sequence_id", xcol, ycol)
-        and not pd.api.types.is_numeric_dtype(df[c])
-    ]
-
-    for col in categorical_cols:
-        df_local = df[[xcol, ycol, col]].dropna().copy()
-        df_local[col] = df_local[col].astype(str).astype("category")
-
-        if df_local.empty:
-            continue
-
-        info(f"    → categorical: {col}")
-
-        cvs = _base_canvas(df_local, xcol, ycol)
-
-        # 3D aggregate per category
-        agg = cvs.points(df_local, xcol, ycol, ds.by(col, ds.count()))
-
-        categories = list(df_local[col].cat.categories)
-        if not categories:
-            continue
-
-        # Stable colour mapping
-        if len(categories) == 1:
-            color_key = {categories[0]: "#FF0000"}
-        else:
-            try:
-                from datashader.colors import fire
-            except ImportError:
-                fire = ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00", "#ffff33", "#a65628", "#f781bf"]
-            palette = [fire[i % len(fire)] for i in range(len(categories))]
-            color_key = dict(zip(categories, palette))
-
-        # Shade categorical aggregate
-        img = tf.shade(
-            agg,
-            color_key=color_key,
-            how='eq_hist',  # correct method for categorical data
-            alpha=255
-        )
-
-        img = tf.dynspread(img, threshold=0.5)
-
-        export_image(
-            img,
-            filename=f"{method}_by_{col}",
-            export_path=str(outdir),
-        )
-
-        
-def _render_continuous_columns(df, xcol, ycol, outdir, method):
-    continuous_cols = [
-        c for c in df.columns
-        if c not in (xcol, ycol, "sequence_id") and pd.api.types.is_numeric_dtype(df[c])
-    ]
-
-    for col in continuous_cols:
-        df_local = df[[xcol, ycol, col]].dropna().copy()
-        df_local[col] = df_local[col].astype(float)
-
-        info(f"    → continuous: {col}")
-
-        cvs = _base_canvas(df_local, xcol, ycol)
-        agg = cvs.points(df_local, xcol, ycol, ds.mean(col))
-        img = tf.shade(agg, cmap=CET_L17, how='eq_hist')  # eq_hist avoids empty plots
-        img = tf.dynspread(img, threshold=0.5)
-
-        export_image(img, filename=f"{method}_by_{col}", export_path=str(outdir))
 
 
 def _render_feature_to_image(df, xcol, ycol, feature_col, mode="categorical", width=400, height=400):
