@@ -27,6 +27,7 @@ dependencies = [
     "hdbscan",
     "leidenalg",
     "scipy",
+    "datashader",
 ]
 
 [project.scripts]

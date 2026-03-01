@@ -236,6 +236,61 @@ def discover_pipeline(
     print("-" * 70)
 
 
+@app.command("visualise", rich_help_panel="Analysis")
+def visualise_db(
+    db_path: Path = typer.Option(
+        ...,
+        "-d",
+        "--db",
+        help="Path to the SQLite/SpatiaLite database"
+    ),
+    max_categories: int = typer.Option(
+        10,
+        "--max-categories",
+        help="Max number of categories for categorical feature plots"
+    ),
+    embeddings: bool = typer.Option(
+        True,
+        "--embeddings/--no-embeddings",
+        help="Generate embedding plots"
+    ),
+    embedding_mode: str = typer.Option(
+        "all",
+        "--embedding-mode",
+        help="Embedding plot mode: density, categorical, continuous, all"
+    ),
+    features: bool = typer.Option(
+        True,
+        "--features/--no-features",
+        help="Generate feature plots"
+    ),
+):
+    """
+    Visualise database tables.
+
+    - Feature distributions and categorical comparisons
+    - Embedding visualisations (UMAP, t-SNE, etc.)
+
+    Plots are saved inside:
+        <analysis_output>/plots/
+    """
+    from kmer_ord.workflow.operations import PlotFeatures, PlotEmbeddings
+    from kmer_ord.workflow.context import DBContext
+
+    ctx = DBContext(db_path)
+
+    if features:
+        section("Generating feature plots")
+        plot_features = PlotFeatures(max_categories=max_categories)
+        plot_features.run(ctx)
+
+    if embeddings:
+        section("Generating embedding plots")
+        plot_embeddings = PlotEmbeddings(mode=embedding_mode)
+        plot_embeddings.run(ctx)
+
+    info(f"All plots saved to: {ctx.output_dir / 'plots'}")
+
 
 # -----------------------------
 # fastq to fasta

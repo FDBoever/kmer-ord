@@ -124,24 +124,28 @@ def populate_features_table(conn, df: pd.DataFrame):
 # ---------------------------------------------------------
 
 def create_coordinates_table(conn, df: pd.DataFrame):
+    """
+    Create the coordinates table with proper sequence_id and geometry columns.
+    """
     cursor = conn.cursor()
 
+    # Use sequence_id as primary key
     cursor.execute("""
         CREATE TABLE coordinates (
-            header TEXT PRIMARY KEY,
-            FOREIGN KEY (header) REFERENCES features (sequence_id)
+            sequence_id TEXT PRIMARY KEY,
+            FOREIGN KEY (sequence_id) REFERENCES features (sequence_id)
         );
     """)
 
     methods = set()
 
-    # detect methods dynamically
-    for col in df.columns[1:]:  # skip header column
+    # detect methods dynamically from df columns (skip the first column which is sequence_id)
+    for col in df.columns[1:]:
         base = col.rsplit("_", 1)[0]
         methods.add(base)
 
     for method in methods:
-        # detect dimension count
+        # determine number of dimensions
         dims = 0
         i = 1
         while f"{method}_{i}" in df.columns:
@@ -149,16 +153,10 @@ def create_coordinates_table(conn, df: pd.DataFrame):
             i += 1
 
         if dims not in (2, 3):
-            raise ValueError(
-                f"{method} must have 2 or 3 dimensions for spatial storage."
-            )
+            raise ValueError(f"{method} must have 2 or 3 dimensions for spatial storage.")
 
-        if dims == 2:
-            geom_type = "POINT"
-            coord_dim = "XY"
-        else:
-            geom_type = "POINTZ"
-            coord_dim = "XYZ"
+        geom_type = "POINT" if dims == 2 else "POINTZ"
+        coord_dim = "XY" if dims == 2 else "XYZ"
 
         cursor.execute(
             f"""
@@ -176,15 +174,20 @@ def create_coordinates_table(conn, df: pd.DataFrame):
     return methods
 
 
+
+
 def populate_coordinates_table(conn, df: pd.DataFrame, methods):
+    """
+    Populate the coordinates table using sequence_id strings instead of numeric indices.
+    """
     cursor = conn.cursor()
     conn.execute("BEGIN TRANSACTION;")
 
     for _, row in df.iterrows():
-        header = row.iloc[0]
+        sequence_id = row.iloc[0]  # this should now be the real sequence_id string
 
-        columns = ["header"]
-        values = [header]
+        columns = ["sequence_id"]
+        values = [sequence_id]
         placeholders = ["?"]
 
         for method in methods:
@@ -199,9 +202,7 @@ def populate_coordinates_table(conn, df: pd.DataFrame, methods):
             elif len(dims) == 3:
                 wkt = f"POINT Z({dims[0]} {dims[1]} {dims[2]})"
             else:
-                raise ValueError(
-                    f"{method} must have 2 or 3 dimensions."
-                )
+                raise ValueError(f"{method} must have 2 or 3 dimensions.")
 
             columns.append(method)
             values.append(wkt)
@@ -211,7 +212,6 @@ def populate_coordinates_table(conn, df: pd.DataFrame, methods):
             INSERT INTO coordinates ({','.join(columns)})
             VALUES ({','.join(placeholders)});
         """
-
         cursor.execute(insert_sql, values)
 
     conn.commit()
@@ -362,7 +362,7 @@ def inspect_database(db_file: Path, limit: int = 5):
                     continue
 
                 geom_names = geom_cols["f_geometry_column"].tolist()
-                select_parts = ["header"]
+                select_parts = ["CAST(sequence_id AS TEXT) AS sequence_id"]
                 for col in geom_names:
                     select_parts.append(f"ST_X({col}) AS {col}_1")
                     select_parts.append(f"ST_Y({col}) AS {col}_2")

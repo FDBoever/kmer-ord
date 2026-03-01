@@ -46,6 +46,7 @@ class FastaStats(Operation):
         context.register("summary_overall", overall_path)
         context.register("summary_per_sequence", per_seq_path)
 
+
 class KmerCount(Operation):
     name = "kmer_count"
     requires = ["fasta"]
@@ -74,9 +75,6 @@ class KmerCount(Operation):
 
         context.register("kmer_matrix", output_path)
 
-
-
-
 # -----------------------------
 # DR
 
@@ -88,7 +86,7 @@ from kmer_ord.dr.methods import run_dr_methods
 class MatrixPreprocessing(Operation):
     name = "matrix_preprocessing"
     requires = ["kmer_matrix"]
-    produces = ["preprocessed_matrices"]
+    produces = ["preprocessed_matrices", "preprocessed_sequence_ids"]
 
     def __init__(
         self,
@@ -98,7 +96,7 @@ class MatrixPreprocessing(Operation):
         keep_variance=None,
         scale="auto",
         max_memory_gb=None,
-):
+    ):
         self.normalisations = normalisations
         self.pca_dim_red = pca_dim_red
         self.keep_pcs = keep_pcs
@@ -107,14 +105,20 @@ class MatrixPreprocessing(Operation):
         self.max_memory_gb = max_memory_gb
 
     def run(self, context):
-
+        # Load full matrix including sequence_id column
         matrix_path = context.get("kmer_matrix")
         matrix = load_matrix(matrix_path)
+
+        #if "sequence_id" not in matrix.columns:
+        #    raise RuntimeError("Input matrix must contain 'sequence_id' column.")
+
+        sequence_ids = matrix.index.to_numpy()
 
         output_dir = context.output_dir / "matrices"
         output_dir.mkdir(parents=True, exist_ok=True)
 
         outputs = []
+        seqid_outputs = []
 
         normalisations = (
             self.normalisations
@@ -123,34 +127,46 @@ class MatrixPreprocessing(Operation):
         )
 
         for norm in normalisations:
-
+            # -----------------------------
+            # Save numeric matrix
+            # -----------------------------
             out_path = output_dir / f"{matrix_path.stem}_{norm}.npy"
-
             if out_path.exists() and not context.force:
                 outputs.append(out_path)
-                continue
+            else:
+                # preprocess (drop sequence_id for numeric operations)
+                # X = preprocess_data(matrix.drop(columns="sequence_id"), norm)
+                X = preprocess_data(matrix, norm)
 
-            X = preprocess_data(matrix, norm)
+                if self.pca_dim_red:
+                    X = reduce_dimensions_with_pca(
+                        X,
+                        keep_pcs=self.keep_pcs,
+                        keep_variance=self.keep_variance,
+                    )
 
-            if self.pca_dim_red:
-                X = reduce_dimensions_with_pca(
-                    X,
-                    keep_pcs=self.keep_pcs,
-                    keep_variance=self.keep_variance,
-                )
+                np.save(out_path, X)
+                outputs.append(out_path)
 
-            np.save(out_path, X)
-            outputs.append(out_path)
+            # -----------------------------
+            # Save sequence IDs separately
+            # -----------------------------
+            seqid_path = output_dir / f"{matrix_path.stem}_{norm}_sequence_ids.npy"
+            if seqid_path.exists() and not context.force:
+                seqid_outputs.append(seqid_path)
+            else:
+                np.save(seqid_path, sequence_ids.astype("U"))
+                seqid_outputs.append(seqid_path)
 
+        # Register outputs
         context.register("preprocessed_matrices", outputs)
-
-
+        context.register("preprocessed_sequence_ids", seqid_outputs)
 
 #GRAPH_METHODS = {"umap", "trimap", "pacmap", "localmap"}  # DR methods that produce a graph
 
 class DimensionalityReduction(Operation):
     name = "dimensionality_reduction"
-    requires = ["preprocessed_matrices"]
+    requires = ["preprocessed_matrices", "preprocessed_sequence_ids"]
     produces = ["dr_embeddings", "dr_graph"]
 
     def __init__(
@@ -172,13 +188,14 @@ class DimensionalityReduction(Operation):
     def run(self, context):
 
         matrix_paths = context.get("preprocessed_matrices")
+        seqid_paths = context.get("preprocessed_sequence_ids")
         dr_dir = context.output_dir / "dr"
         dr_dir.mkdir(parents=True, exist_ok=True)
 
         merged_outputs = []
         all_graph_paths = []
 
-        for matrix_path in matrix_paths:
+        for i, matrix_path in enumerate(matrix_paths):
 
             norm_label = matrix_path.stem.split("_")[-1]
             input_name = "_".join(matrix_path.stem.split("_")[:-1])
@@ -187,9 +204,10 @@ class DimensionalityReduction(Operation):
 
             X = np.load(matrix_path)
 
-            # -------------------------
+            # Load corresponding sequence IDs
+            sequence_ids = np.load(seqid_paths[i])
+
             # Memory check
-            # -------------------------
             if self.max_memory_gb:
                 est_peak = X.nbytes * 4 / (1024 ** 3)
                 if est_peak > self.max_memory_gb:
@@ -205,9 +223,7 @@ class DimensionalityReduction(Operation):
                 / f"{input_name}_{norm_label}_{self.dims}D_merged_embeddings.tsv"
             )
 
-            # -------------------------
             # Caching behaviour
-            # -------------------------
             if merged_output.exists() and not context.force:
                 merged_outputs.append(merged_output)
 
@@ -219,9 +235,7 @@ class DimensionalityReduction(Operation):
 
                 continue
 
-            # -------------------------
-            # Run DR
-            # -------------------------
+            # Run DR with proper sequence IDs
             merged_file, graph_paths = run_dr_methods(
                 X=X,
                 methods=self.methods,
@@ -232,7 +246,7 @@ class DimensionalityReduction(Operation):
                 output_dir=dr_dir,
                 normalisation=norm_label,
                 input_name=input_name,
-                sequence_ids=None,
+                sequence_ids=sequence_ids,
             )
 
             merged_outputs.append(merged_file)
@@ -240,17 +254,12 @@ class DimensionalityReduction(Operation):
             if graph_paths:
                 all_graph_paths.extend(graph_paths)
 
-        # -------------------------
         # Register outputs
-        # -------------------------
         context.register("dr_embeddings", merged_outputs)
 
         if all_graph_paths:
             context.register("dr_graph", all_graph_paths)
 
-
-
-from kmer_ord.io.kmer_stats import process_kmer_file
 
 class KmerMetrics(Operation):
     name = "kmer_metrics"
@@ -262,6 +271,7 @@ class KmerMetrics(Operation):
         self.cpus = cpus
 
     def run(self, context):
+        from kmer_ord.io.kmer_stats import process_kmer_file
         matrix_path = context.get("kmer_matrix")
 
         output_file = context.artifact_path(name="kmer_metrics", subdir="kmer", suffix=".tsv")
@@ -353,17 +363,7 @@ class FeatureMerge(Operation):
         merged.to_csv(output_path, sep="\t", index=False)
         context.register("merged_features", output_path)
 
-
-from kmer_ord.io.database import (initialize_spatialite_db,
-                                  create_fasta_table,
-                                  populate_fasta_table,
-                                  create_features_table,
-                                  populate_features_table,
-                                  create_coordinates_table,
-                                  populate_coordinates_table,
-                                  inspect_database)
-from kmer_ord.io import database 
-
+ 
 class SpatialiteDatabase(Operation):
     name = "spatialite-db"
     requires = ["fasta", "merged_features", "dr_embeddings"]
@@ -373,6 +373,15 @@ class SpatialiteDatabase(Operation):
         self.db_name = db_name
 
     def run(self, context):
+        from kmer_ord.io.database import (initialize_spatialite_db,
+                                  create_fasta_table,
+                                  populate_fasta_table,
+                                  create_features_table,
+                                  populate_features_table,
+                                  create_coordinates_table,
+                                  populate_coordinates_table,
+                                  inspect_database)
+        from kmer_ord.io import database
         output_path = context.output_dir / self.db_name
 
         if output_path.exists() and not context.force:
@@ -408,12 +417,14 @@ class SpatialiteDatabase(Operation):
         for emb_file in embedding_files:
             # Load coordinates (no sequence_id)
             coords_df = pd.read_csv(emb_file, sep="\t")
+            # If sequence_id is missing, add it from features_df
+            if "sequence_id" not in coords_df.columns:
+                coords_df["sequence_id"] = features_df["sequence_id"].values
 
-            # Inject sequence_id from features table (order must match)
-            #features_path = context.get("merged_features")
-            #features_df = pd.read_csv(features_path, sep="\t")
-            #coords_df.insert(0, "sequence_id", features_df["sequence_id"].values)
-        
+            # Ensure sequence_id is the first column
+            cols = ["sequence_id"] + [c for c in coords_df.columns if c != "sequence_id"]
+            coords_df = coords_df[cols]
+            
         methods = create_coordinates_table(conn, coords_df)
         populate_coordinates_table(conn, coords_df, methods)
 
@@ -421,10 +432,6 @@ class SpatialiteDatabase(Operation):
         context.register("database", output_path)
         inspect_database(output_path)
 
-from kmer_ord.cluster.graph import build_knn_graph
-from kmer_ord.cluster.leiden import run_leiden, leiden_resolution_sweep
-from kmer_ord.cluster.hdbscan import run_hdbscan
-from kmer_ord.cluster.dbscan import run_dbscan
 
 class Clustering(Operation):
     name = "clustering"
@@ -466,6 +473,10 @@ class Clustering(Operation):
         self.eps = eps
 
     def run(self, context):
+        from kmer_ord.cluster.graph import build_knn_graph
+        from kmer_ord.cluster.leiden import run_leiden, leiden_resolution_sweep
+        from kmer_ord.cluster.hdbscan import run_hdbscan
+        from kmer_ord.cluster.dbscan import run_dbscan
 
         embedding_files = context.get("dr_embeddings")
         if not isinstance(embedding_files, list):
@@ -495,9 +506,7 @@ class Clustering(Operation):
 
             cluster_df = pd.DataFrame({"sequence_id": sequence_ids})
 
-            # ---------------------------------------------------------
             # LEIDEN
-            # ---------------------------------------------------------
             if self.method == "leiden":
 
                 A = build_knn_graph(X, k=self.knn)
@@ -519,9 +528,7 @@ class Clustering(Operation):
                     )
                     cluster_df["leiden"] = labels
 
-            # ---------------------------------------------------------
             # HDBSCAN
-            # ---------------------------------------------------------
             elif self.method == "hdbscan":
 
                 if self.sweep:
@@ -540,9 +547,7 @@ class Clustering(Operation):
                     )
                     cluster_df["hdbscan"] = labels
 
-            # ---------------------------------------------------------
             # DBSCAN
-            # ---------------------------------------------------------
             elif self.method == "dbscan":
 
                 if self.sweep:
@@ -568,9 +573,7 @@ class Clustering(Operation):
             cluster_df.to_csv(output_file, sep="\t", index=False)
             cluster_outputs.append(output_file)
 
-        # ---------------------------------------------------------
         # SAFE artifact registration (fixes your NameError issue)
-        # ---------------------------------------------------------
         existing = context.artifacts.get("clusters", [])
         if not isinstance(existing, list):
             existing = [existing]
@@ -588,6 +591,8 @@ class AddClusteringToDB(Operation):
         self.force = force
 
     def run(self, context):
+        from kmer_ord.io.database import (add_dr_and_clusters_to_db, inspect_database)
+
         embedding_files = context.get("dr_embeddings")
         cluster_files = context.get("clusters")
 
@@ -596,7 +601,7 @@ class AddClusteringToDB(Operation):
         if not isinstance(cluster_files, list):
             cluster_files = [cluster_files]
 
-        database.add_dr_and_clusters_to_db(
+        add_dr_and_clusters_to_db(
             db_path=self.db_path,
             embedding_files=embedding_files,
             cluster_files=cluster_files,
@@ -605,3 +610,66 @@ class AddClusteringToDB(Operation):
 
         context.register("database", self.db_path)
         inspect_database(self.db_path)
+
+
+#----------------------------------------------------------#
+# PLOTTING
+
+class PlotFeatures(Operation):
+    name = "plot_features"
+    requires = ["database"]
+    produces = ["plots"]
+
+    def __init__(self, max_categories: int = 10):
+        # Plots will always go inside a 'plots' folder in the analysis output directory
+        self.max_categories = max_categories
+
+    def run(self, context):
+        from kmer_ord.vis.feature_plots import plot_numeric_distributions, plot_categorical_vs_numeric
+
+        db_path = context.get("database")
+        output_dir = db_path.parent / "plots" / "features"
+        output_dir.mkdir(exist_ok=True, parents=True)
+
+        # Currently only the 'features' table, can expand later
+        plot_numeric_distributions(db_path, "features", output_dir)
+        plot_categorical_vs_numeric(db_path, "features", output_dir, max_categories=self.max_categories)
+
+        context.register("plots", output_dir)
+
+
+class PlotEmbeddings(Operation):
+    name = "plot_embeddings"
+    requires = ["database"]
+    produces = ["embedding_plots"]
+
+    def __init__(self, mode: str = "all"):
+        self.mode = mode  # "density", "categorical", "continuous", "all"
+
+    def run(self, context):
+        from kmer_ord.vis.embedding_plots import plot_embeddings_from_db
+
+        db_path = context.get("database")
+        output_dir = context.output_dir / "plots" / "embeddings"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        plot_embeddings_from_db(db_path=db_path, output_root=output_dir, mode=self.mode,)
+
+        context.register("embedding_plots", output_dir)
+
+class PlotParamScreen(Operation):
+    name = "plot_param_screen"
+    produces = ["param_screen_plots"]
+
+    def __init__(self, screen_dir: Path, method: str):
+        self.screen_dir = screen_dir
+        self.method = method
+
+    def run(self, context):
+        from kmer_ord.vis.param_screen import plot_param_screen
+
+        output_dir = context.output_dir / "plots" / "param_screen"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        plot_param_screen(self.screen_dir, self.method, output_dir)
+
+        context.register("param_screen_plots", output_dir)

@@ -114,3 +114,14 @@ class Context:
         if exists:
             self.logger.info(f"Skipping '{name}', artifact already exists at {self.artifacts[name]}")
         return exists
+    
+class DBContext:
+    def __init__(self, db_path: Path):
+        self.output_dir = db_path.parent
+        self.artifacts = {"database": db_path}
+
+    def register(self, name: str, path):
+        self.artifacts[name] = path
+
+    def get(self, name: str):
+        return self.artifacts[name]

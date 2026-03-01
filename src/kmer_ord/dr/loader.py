@@ -18,6 +18,7 @@ def load_matrix(matrix_path: Path) -> pd.DataFrame:
 
     if suffix in [".tsv", ".csv"]:
         df = pd.read_csv(matrix_path, sep="\t" if suffix == ".tsv" else ",", index_col=0)
+        #df = pd.read_csv(matrix_path, sep="\t" if suffix == ".tsv" else ",", index_col=None)
     elif suffix == ".npy":
         arr = np.load(matrix_path)
         df = pd.DataFrame(arr)
