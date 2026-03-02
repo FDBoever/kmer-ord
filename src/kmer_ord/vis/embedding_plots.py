@@ -85,6 +85,8 @@ def plot_embeddings_from_db(db_path: Path, output_root: Path, mode: str = "all")
     conn.close()
 
 
+
+
 def _discover_geometry_methods(conn):
     query = """
         SELECT f_geometry_column

@@ -143,8 +143,7 @@ def discover_pipeline(
         KmerMetrics,
         DimensionalityReduction,
         Clustering,
-        AddClusteringToDB,
-    )
+        AddClusteringToDB)
 
     context = Context(input, output_dir, force=force)
 
@@ -170,48 +169,25 @@ def discover_pipeline(
             methods=method_list,
             dims=dims,
             scale=scale,
-            #seed=seed,
-            screen_params=screen_params,),
-    ]
+            screen_params=screen_params,)]
 
     # -----------------------------
     # Clustering operations
     # -----------------------------
     for method in cluster_list:
-
         if method == "leiden":
-            operations.append(
-                Clustering(
-                    method="leiden",
-                    sweep=leiden_sweep,
-                )
-            )
-
+            operations.append(Clustering(method="leiden",sweep=leiden_sweep))
         elif method == "hdbscan":
-            operations.append(
-                Clustering(
-                    method="hdbscan",
-                    sweep=hdbscan_sweep,
-                )
-            )
-
+            operations.append(Clustering(method="hdbscan",sweep=hdbscan_sweep))
         elif method == "dbscan":
-            operations.append(
-                Clustering(
-                    method="dbscan",
-                    sweep=dbscan_sweep,
-                )
-            )
-
+            operations.append(Clustering(method="dbscan",sweep=dbscan_sweep))
         else:
             raise ValueError(f"Unknown clustering method: {method}")
 
     runner = Runner(operations)
     runner.run(context)
 
-    # -----------------------------
     # Database integration
-    # -----------------------------
     if db_path is None:
         db_path = output_dir / "discovery.sqlite"
 
@@ -238,42 +214,20 @@ def discover_pipeline(
 
 @app.command("visualise", rich_help_panel="Analysis")
 def visualise_db(
-    db_path: Path = typer.Option(
-        ...,
-        "-d",
-        "--db",
-        help="Path to the SQLite/SpatiaLite database"
-    ),
-    max_categories: int = typer.Option(
-        10,
-        "--max-categories",
-        help="Max number of categories for categorical feature plots"
-    ),
-    embeddings: bool = typer.Option(
-        True,
-        "--embeddings/--no-embeddings",
-        help="Generate embedding plots"
-    ),
-    embedding_mode: str = typer.Option(
-        "all",
-        "--embedding-mode",
-        help="Embedding plot mode: density, categorical, continuous, all"
-    ),
-    features: bool = typer.Option(
-        True,
-        "--features/--no-features",
-        help="Generate feature plots"
-    ),
-):
+    db_path: Path = typer.Option(..., "-d", "--db", help="Path to the SQLite/SpatiaLite database"),
+    max_categories: int = typer.Option(10, "--max-categories", help="Max number of categories for categorical feature plots"),
+    embeddings: bool = typer.Option(True, "--embeddings/--no-embeddings", help="Generate embedding plots"),
+    embedding_mode: str = typer.Option("all", "--embedding-mode", help="Embedding plot mode: density, categorical, continuous, all"),
+    features: bool = typer.Option(True, "--features/--no-features", help="Generate feature plots")):
     """
     Visualise database tables.
-
     - Feature distributions and categorical comparisons
     - Embedding visualisations (UMAP, t-SNE, etc.)
-
-    Plots are saved inside:
-        <analysis_output>/plots/
     """
+    print("-" * 70)
+    section("Starting kmer-ord visualisation...")
+    info("loading packages")
+
     from kmer_ord.workflow.operations import PlotFeatures, PlotEmbeddings
     from kmer_ord.workflow.context import DBContext
 
@@ -290,6 +244,8 @@ def visualise_db(
         plot_embeddings.run(ctx)
 
     info(f"All plots saved to: {ctx.output_dir / 'plots'}")
+    print("-" * 70)
+    section("Done.")
 
 
 # -----------------------------
@@ -298,8 +254,7 @@ def visualise_db(
 def fastq_to_fasta_cmd(
     input: Path = typer.Option(..., "-i","--input", help="Input fastq file (can be gzipped)"),
     output: Path = typer.Option(..., "-o","--output", help="Output fasta file"),
-    force: bool = typer.Option(False, "-f","--force", help="Overwrite output if it exists"),
-):
+    force: bool = typer.Option(False, "-f","--force", help="Overwrite output if it exists")):
     """
     Convert fastq (or fastq.gz) to fasta.
     """
@@ -318,8 +273,7 @@ def fastq_to_fasta_cmd(
 def fasta_stats_cmd(
     input: Path = typer.Option(..., "-i","--input", help="Input fasta file"),
     output_dir: Path = typer.Option(..., "-o","--output", help="Output directory"),
-    force: bool = typer.Option(False, "-f","--force", help="Recalculate stats even if outputs exist"),
-):
+    force: bool = typer.Option(False, "-f","--force", help="Recalculate stats even if outputs exist")):
     """
     Calculate per-sequence and overall statistics from a fasta file.
     """
@@ -328,8 +282,7 @@ def fasta_stats_cmd(
     context = Context(input, output_dir, force=force)
     df, overall_file, tsv_file = calculate_stats(
         input_fasta=context.fasta,
-        output_dir=context.output_dir / "summary"
-    )
+        output_dir=context.output_dir / "summary")
     info(f"Stats calculated. Sequence-level tsv: {tsv_file}, Overall: {overall_file}")
 
 # -----------------------------
@@ -409,8 +362,7 @@ def dr_cmd(
         keep_pcs=keep_pcs,
         keep_variance=keep_variance,
         screen_params=screen_params,
-        scale=scale,
-    )
+        scale=scale)
 
     operation.run(context)
 
@@ -422,23 +374,17 @@ def cluster_pipeline(
     input: Path = typer.Option(..., "-i", "--input", help="Input directory containing artifacts"),
     output_dir: Path = typer.Option(..., "-o", "--output"),
     method: str = typer.Option("hdbscan", "--method"),
-    force: bool = typer.Option(False, "-f", "--force"),
-):
+    force: bool = typer.Option(False, "-f", "--force")):
     """
     Cluster sequences using existing embedding.
     """
 
-    from kmer_ord.workflow.operations import (
-        Clustering,
-        SpatialiteDatabase,
-    )
+    from kmer_ord.workflow.operations import (Clustering, SpatialiteDatabase)
 
     context = Context(input, output_dir, force=force)
 
-    operations = [
-        Clustering(method=method),
-        SpatialiteDatabase(),
-    ]
+    operations = [Clustering(method=method),
+                  SpatialiteDatabase()]
 
     runner = Runner(operations)
     runner.run(context)
