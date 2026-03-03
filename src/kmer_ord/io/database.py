@@ -169,6 +169,10 @@ def create_coordinates_table(conn, df: pd.DataFrame):
             );
             """
         )
+    
+    # Create spatial indices for all geometry columns
+    for method in methods:
+        cursor.execute(f"SELECT CreateSpatialIndex('coordinates', '{method}');")
 
     conn.commit()
     return methods

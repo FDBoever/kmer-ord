@@ -30,7 +30,7 @@ conda activate kmerord
 Once inside the new conda, install some python dependencies
 
 ```bash
-conda install -c conda-forge numpy pandas scikit-learn umap-learn pacmap numba llvmlite biopython typer libspatialite python-igraph hnswlib hdbscan scipy leidenalg setuptools==65.5.0
+conda install -c conda-forge numpy pandas scikit-learn umap-learn pacmap numba llvmlite biopython typer libspatialite python-igraph hnswlib hdbscan scipy leidenalg matplotlib seaborn setuptools==65.5.0
 ```
 
 Then enter repository directory and install (editable mode):

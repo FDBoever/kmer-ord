@@ -28,6 +28,9 @@ dependencies = [
     "leidenalg",
     "scipy",
     "datashader",
+    "dash",
+    "dash-bootstrap-components",
+    "bokeh"
 ]
 
 [project.scripts]
