@@ -112,21 +112,6 @@ def parse_feature_types(db_path, nrows=5):
         feature_info.append({'column_name': col, 'type': col_type})
     return feature_info
 
-
-#def get_available_coordinate_systems(db_path):
-#    conn = get_connection(db_path)
-#    try:
-#        cursor = conn.execute("PRAGMA table_info(coordinates);")
-#        all_cols = cursor.fetchall()
-#        coord_systems = []
-#        for info in all_cols:
-#            name = info[1]
-#            if name not in ('header','id') and not name.lower().startswith('st_'):
-#                coord_systems.append(name)
-#    finally:
-#        conn.close()
-#    return coord_systems
-
 def get_available_coordinate_systems(db_path):
     """
     Return a list of coordinate system names (geometry columns) in the coordinates table,
@@ -205,6 +190,22 @@ def load_coordinates_from_db(db_path, coordinate_systems,
         conn.close()
     return df
 
+def get_number_of_reads(db_path):
+    conn = sqlite3.connect(db_path)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM features;")
+        count = cursor.fetchone()[0]
+    finally:
+        conn.close()
+    return count
+
+
+def get_number_of_ordinations(db_path):
+    coord_systems = get_available_coordinate_systems(db_path)
+    return len(coord_systems)
+
+#---- plotting utils ----
 def create_datashader_image(df, x_col, y_col,
                             color_col=None, color_palette="viridis",
                             px_spread=3):
@@ -248,142 +249,205 @@ def create_datashader_image(df, x_col, y_col,
 # BUILD SIDEBAR
 ##############################
 def build_dynamic_sidebar(feature_info):
-    children = [
-        html.H2("Filters"),
-        html.Hr(),
-        html.P("Data Filters", className="lead")
+    coord_opts = get_available_coordinate_systems(db_path)
+
+    section_title_style = {
+        "fontSize": "0.7rem",
+        "textTransform": "uppercase",
+        "letterSpacing": "1px",
+        "opacity": 0.5,
+        "marginBottom": "0.6rem",
+        "marginTop": "1.4rem",
+    }
+
+    input_style = {
+        "backgroundColor": "#252525",
+        "background": "#383B3E",
+        "border": "1px solid #2f2f2f",
+        "color": "#e5e5e5",
+        "fontSize": "0.8rem",
+    }
+
+    button_style = {
+        "backgroundColor": "#222",
+        "border": "1px solid #333",
+        "color": "#ddd",
+        "fontSize": "0.75rem",
+        "padding": "6px 10px",
+    }
+
+    children = []
+
+    # PLOT CONTROLS
+    children += [
+        html.Div("Plot Controls", style=section_title_style),
+
+        dbc.Label("Coordinate Systems", className="small"),
+        dcc.Dropdown(
+            id="coordinate-systems-checklist",
+            options=[{"label": cs, "value": cs} for cs in coord_opts],
+            multi=True,
+            placeholder="Select DR methods",
+            style=input_style,
+        ),
+
+        dbc.Label("Color By", className="small mt-3"),
+        dcc.Dropdown(
+            id="color-feature-dropdown",
+            options=[
+                {"label": f['column_name'], "value": f['column_name']}
+                for f in feature_info
+            ],
+            placeholder="Select feature",
+            style=input_style,
+        ),
+
+        dbc.Label("Color Palette", className="small mt-3"),
+        dcc.Dropdown(
+            id="color-palette-dropdown",
+            options=[
+                {"label": "viridis", "value": "viridis"},
+                {"label": "plasma", "value": "plasma"},
+                {"label": "inferno", "value": "inferno"},
+                {"label": "Category10", "value": "Category10"},
+                {"label": "glasbey", "value": "glasbey"},
+            ],
+            value="viridis",
+            style=input_style,
+        ),
+
+        dbc.Label("Pixel Spread", className="small mt-3"),
+        dcc.Input(
+            id="px-spread-input",
+            type="number",
+            min=1,
+            step=1,
+            value=3,
+            style={**input_style, "width": "100%"},
+        ),
+
+        dbc.Button(
+            "Update Plots",
+            id="update-plots-button",
+            className="w-100 mt-3",
+            style=button_style,
+        ),
     ]
+
+    # ACTIONS
+    children += [
+        html.Div("Actions", style=section_title_style),
+
+        dbc.Button(
+            "Export Bins",
+            id="export-bins-button",
+            className="w-100 mb-2",
+            style=button_style,
+        ),
+
+        dbc.Button(
+            "Delete DF",
+            id="delete-df-button",
+            className="w-100",
+            style={
+                **button_style,
+                "border": "1px solid #442",
+                "color": "#f08080",
+            },
+        ),
+    ]
+
+    # FILTERS
+    filter_children = []
 
     for feat in feature_info:
         nm, tp = feat['column_name'], feat['type']
 
-        if tp == 'continuous':
-            children.append(
+        if tp == "continuous":
+            filter_children.append(
                 html.Div([
-                    dbc.Label(f"{nm} (Continuous)"),
+                    dbc.Label(nm, className="small"),
                     dbc.Row([
                         dbc.Col(
                             dcc.Input(
-                                id={"type":"continuous-filter-min","column_name":nm},
+                                id={"type": "continuous-filter-min", "column_name": nm},
                                 type="number",
-                                placeholder=f"Min {nm}",
-                                style={"width":"100%"}
+                                placeholder="Min",
+                                style={**input_style, "width": "100%"},
                             ),
                             width=6
                         ),
                         dbc.Col(
                             dcc.Input(
-                                id={"type":"continuous-filter-max","column_name":nm},
+                                id={"type": "continuous-filter-max", "column_name": nm},
                                 type="number",
-                                placeholder=f"Max {nm}",
-                                style={"width":"100%"}
+                                placeholder="Max",
+                                style={**input_style, "width": "100%"},
                             ),
                             width=6
-                        )
-                    ])
-                ], className="mb-3")
-            )
-        else:
-            children.append(
-                html.Div([
-                    dbc.Label(f"{nm} (Categorical)"),
-                    dcc.Checklist(
-                        id={"type":"cat-checklist","column_name":nm},
-                        options=[],
-                        value=[],
-                        labelStyle={'display':'block'},
-                    )
+                        ),
+                    ], className="g-2"),
                 ], className="mb-3")
             )
 
-    coord_opts = get_available_coordinate_systems(db_path)
+        else:
+            filter_children.append(
+                html.Div([
+                    dbc.Label(nm, className="small"),
+                    dcc.Dropdown(
+                        id={"type": "cat-checklist", "column_name": nm},
+                        multi=True,
+                        placeholder="Select values",
+                        style=input_style,
+                    ),
+                ], className="mb-3")
+            )
 
     children += [
-        html.Div([
-            dbc.Label("Select Coordinate Systems"),
-            dcc.Checklist(
-                id="coordinate-systems-checklist",
-                options=[{"label":cs,"value":cs} for cs in coord_opts],
-                value=[],
-                labelStyle={'display':'block'},
-            )
-        ], className="mb-3"),
-
-        html.Div([
-            dbc.Label("Color By Feature"),
-            dcc.Dropdown(
-                id="color-feature-dropdown",
-                options=[
-                    {"label":f['column_name'], "value":f['column_name']}
-                    for f in feature_info
-                ],
-                value=None,
-                placeholder="Select a feature to color by",
-            )
-        ], className="mb-3"),
-
-        html.Div([
-            dbc.Label("Color Palette"),
-            dcc.Dropdown(
-                id="color-palette-dropdown",
-                options=[
-                    {"label":"viridis","value":"viridis"},
-                    {"label":"plasma","value":"plasma"},
-                    {"label":"inferno","value":"inferno"},
-                    {"label":"Category10 (cat)","value":"Category10"},
-                    {"label":"glasbey (cat)","value":"glasbey"}
-                ],
-                value="viridis",
-            )
-        ], className="mb-3"),
-
-        html.Div([
-            dbc.Label("Pixel spread (Datashader px)"),
-            dcc.Input(
-                id="px-spread-input",
-                type="number",
-                min=1,
-                step=1,
-                value=3,
-                style={"width":"100%"}
-            )
-        ], className="mb-3"),
-
-        dbc.Button("Update Plots", id="update-plots-button", color="primary", className="mt-2 w-100"),
-        dbc.Button("Export Bins", id="export-bins-button", color="primary", className="mt-2 w-100"),
-        dbc.Button("Delete DF", id="delete-df-button", color="danger", className="mt-2 w-100"),
+        html.Div("Filters (Advanced)", style=section_title_style),
+        dbc.Accordion(
+            [
+                dbc.AccordionItem(
+                    filter_children,
+                    title="Show Filters"
+                )
+            ],
+            start_collapsed=True,
+            flush=True,
+        ),
     ]
 
     sidebar_style = {
-        "position": "fixed",
-        "top": 0,
-        "left": 0,
-        "bottom": 0,
-        "width": "20rem",
-        "padding": "2rem 1rem",
+        "width": "18rem",
+        "padding": "1.5rem 1rem",
         "overflowY": "auto",
-    }
+        "backgroundColor": "#32383E",
+        "borderRight": "1px solid #2a2a2a"}
 
-    return dbc.Card(
-        dbc.CardBody(children),
-        style=sidebar_style
-    )
-
+    return html.Div(children, style=sidebar_style, className="sidebar")
 
 ##############################
 # APP INITIALIZATION
 ##############################
+external_stylesheets = [
+    dbc.themes.SLATE,
+    "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css"
+]
+
+app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
+
 ##from dash_bootstrap_templates import load_figure_template
 ##load_figure_template("slate")
 # Choose theme
 # app = dash.Dash(__name__, external_stylesheets=[dbc.themes.FLATLY])
 # app = dash.Dash(__name__, external_stylesheets=[dbc.themes.SUPERHERO])
 # app = dash.Dash(__name__, external_stylesheets=[dbc.themes.COSMO])
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.SLATE])
 #app = dash.Dash(__name__, external_stylesheets=[dbc.themes.DARKLY])
 
 feature_info = parse_feature_types(db_path)
 sidebar = build_dynamic_sidebar(feature_info)
+nr_reads = get_number_of_reads(db_path)
+nr_ordinations = get_number_of_ordinations(db_path)
 
 store_bins = dcc.Store(id='bins-store', data=[])
 store_overlay = dcc.Store(id='overlay-store', data=[])
@@ -391,45 +455,127 @@ store_overlay = dcc.Store(id='overlay-store', data=[])
 ##############################
 # LAYOUT
 ##############################
-BANNER_HEIGHT = "90px"
 
+
+def make_count_badges(db_path):
+    conn = sqlite3.connect(db_path)
+    try:
+        nr_reads = conn.execute("SELECT COUNT(*) FROM features;").fetchone()[0]
+        all_coords = conn.execute("PRAGMA table_info(coordinates);").fetchall()
+        nr_ordinations = sum(
+            1 for c in all_coords
+            if c[1] not in ("sequence_id", "header")
+            and not c[1].lower().startswith("st_"))
+
+        # Feature types
+        df_sample = pd.read_sql_query("SELECT * FROM features LIMIT 5;", conn)
+
+        cat_count = 0
+        num_count = 0
+
+        for col in df_sample.columns:
+            if col == "sequence_id":
+                continue
+            try:
+                pd.to_numeric(df_sample[col].dropna().astype(str))
+                num_count += 1
+            except ValueError:
+                cat_count += 1
+
+    finally:
+        conn.close()
+
+    badge_style = {"background": "#32383E", "border": "1px solid #2f2f2f",
+                   "color": "#D2D2D2", "fontSize": "0.75rem", "padding": "6px 10px", "borderRadius": "14px"}
+
+    return html.Div(
+        [
+            dbc.Badge(f"Reads: {nr_reads:,}",color=None, style=badge_style, className="me-2"),
+            dbc.Badge(f"Ordinations: {nr_ordinations}",color=None, style=badge_style, className="me-2"),
+            dbc.Badge(f"Numerical: {num_count}",color=None, style=badge_style, className="me-2"),
+            dbc.Badge(f"Categorical: {cat_count}",color=None, style=badge_style,),
+        ],
+        style={
+            "marginBottom": "1rem",
+            "paddingTop": "1rem",
+            "paddingLeft": "1rem",
+            #"marginLeft": "18rem",  # align with main content
+        }
+    )
+
+count_badges = make_count_badges(db_path)
+
+
+# Adjust sidebar to sit BELOW banner
+sidebar.style.update({
+    "top": BANNER_HEIGHT,
+    "height": f"calc(100vh - {BANNER_HEIGHT})",
+})
+
+##############################
+# APP LAYOUT
+##############################
+
+BANNER_HEIGHT = "90px"
+SIDEBAR_WIDTH = "18rem"
+
+# -----------------------
+# Banner (fixed top)
+# -----------------------
 banner = html.Div(
     [
         dbc.Container(
-            dbc.Row(
-                [
-                    dbc.Col(
-                        html.Div([
-                            html.H2("b2w", style={
-                                "margin": 0,
-                                "fontWeight": "600",
-                                "letterSpacing": "1px"
-                            }),
-                            html.Div(
-                                "Interactive binning",
-                                style={
-                                    "fontSize": "0.85rem",
-                                    "opacity": 0.7
-                                }
-                            )
-                        ])
-                    ),
-                    dbc.Col(
-                        html.Div(
-                            "kmer-ord",
-                            style={
-                                "textAlign": "right",
-                                "fontSize": "0.8rem",
-                                "opacity": 0.6,
-                                "marginTop": "10px"
-                            }
+            [
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            html.Div([
+                                html.H2(
+                                    "b2w",
+                                    style={"margin": 0, "fontWeight": "600", "letterSpacing": "1px"},
+                                ),
+                                html.Div(
+                                    "Interactive binning",
+                                    style={"fontSize": "0.85rem", "opacity": 0.7},
+                                ),
+                            ])
                         ),
-                        width="auto"
-                    )
-                ],
-                align="center",
-                style={"height": BANNER_HEIGHT}
-            ),
+                        dbc.Col(
+                            html.Div(
+                                [
+                                    html.Div(
+                                        "kmer-ord",
+                                        style={
+                                            "textAlign": "right",
+                                            "fontSize": "0.8rem",
+                                            "opacity": 0.6,
+                                        },
+                                    ),
+                                    html.Div(
+                                        [
+                                            dbc.Badge(
+                                                [html.I(className="bi bi-github me-1"),
+                                                 "FDBoever/kmer-ord"],
+                                                href="https://github.com/FDBoever/kmer-ord",
+                                                target="_blank",
+                                                color="secondary",
+                                                className="me-2",
+                                                style={"fontSize": "0.7rem",
+                                                       "padding": "6px 7px",
+                                                       "borderRadius": "4px"},
+                                            ),
+                                        ],
+                                        style={"textAlign": "right", "marginTop": "6px"},
+                                    ),
+                                ]
+                            ),
+                            width="auto",
+                        ),
+                    ],
+                    align="center",
+                    style={"height": BANNER_HEIGHT},
+                )
+            ],
             fluid=True
         )
     ],
@@ -441,134 +587,148 @@ banner = html.Div(
         "height": BANNER_HEIGHT,
         "background": "linear-gradient(90deg, #111111, #1c1c1c)",
         "zIndex": 1000,
-        "borderBottom": "1px solid #2a2a2a"
+        "borderBottom": "1px solid #2a2a2a",
+    },
+)
+
+# -----------------------
+# Sidebar + Main content styles
+# -----------------------
+sidebar_style = {
+    "flex": f"0 0 {SIDEBAR_WIDTH}",
+    "maxWidth": SIDEBAR_WIDTH,
+    "overflowY": "auto",
+    "backgroundColor": "#1c1c1c"
+}
+
+main_content_style = {
+    "flex": "1 1 auto",
+    "overflow": "hidden",  # stop plots from forcing flex expansion
+    "display": "flex",
+    "paddingRight": "2rem",
+    "flexDirection": "column",
+}
+
+# -----------------------
+# Sidebar (normal flow)
+# -----------------------
+sidebar = build_dynamic_sidebar(feature_info)
+
+# -----------------------
+# Main content wrapper
+# -----------------------
+main_content = html.Div(
+    [
+        count_badges,
+        dbc.Card(
+            [
+                dbc.CardHeader("Visualise and create Bins"),
+                dbc.CardBody(
+                    [
+                        # --- Scrollable plots container ---
+                        html.Div(
+                            [
+                                html.Div(id='coordinates-plots-container'),
+                                html.Div(
+                                    id='color-legend-container',
+                                    style={"textAlign": "center", "marginTop": "10px","marginBottom": "20px"}
+                                ),
+                            ],
+                            style={
+                                "flex": "1 1 auto",
+                                "overflowY": "auto",
+                                "maxHeight": "calc(100vh - " + BANNER_HEIGHT + " - 250px)",  
+                                # 250px leaves room for controls/footer
+                            }
+                        ),
+                        dbc.Row(
+                            [
+                                dbc.Col(
+                                    dbc.InputGroup(
+                                        [
+                                            dbc.InputGroupText("Bin Name"),
+                                            dbc.Input(id='bin-name-input', type='text', placeholder='Enter bin name',
+                                                      style={"background": "#383B3E", "color": "#ffffff"}),
+                                        ],
+                                        className="mb-3", size="sm",
+                                    ),
+                                    width=4
+                                ),
+                                dbc.Col(dbc.Button("Create Bin", id='create-bin-button',style={"backgroundColor": "#222","border": "1px solid #333","color": "#ddd","fontSize": "0.75rem","padding": "6px 10px",}), width=2),
+                                dbc.Col(dbc.Button("Inspect Bin", id='inspect-bin-button',style={"backgroundColor": "#222","border": "1px solid #333","color": "#ddd","fontSize": "0.75rem","padding": "6px 10px",}), width=2),
+                                dbc.Col(dbc.Button("Overlay Points", id='overlay-points-button',style={"backgroundColor": "#222","border": "1px solid #333","color": "#ddd","fontSize": "0.75rem","padding": "6px 10px",}), width=2),
+                            ],
+                            className="mb-3"
+                        ),
+                        html.H4("Bins List"),
+                        html.Div(id='bin-list-container', className="mb-3"),
+                        html.Div(id='error-message', className="mb-3"),
+                        html.Div(id='bin-table-container', className="mt-3")
+                    ]
+                )
+            ],
+            className="m-3 w-100"
+        )
+    ],
+    style=main_content_style
+)
+
+# -----------------------
+# Footer
+# -----------------------
+footer = html.Div(
+    dbc.Container(
+        dbc.Row(
+            [
+                dbc.Col("2026 Green team / SAMS", width=6,
+                        style={"fontSize": "0.8rem", "opacity": 0.6}),
+                dbc.Col("Version 1.0", width=6,
+                        style={"textAlign": "right", "fontSize": "0.8rem", "opacity": 0.6}),
+            ]
+        ),
+        fluid=True
+    ),
+    style={
+        "padding": "10px 10px",
+        "borderTop": "1px solid #2a2a2a",
+        "backgroundColor": "#111111",
+        "width": "100%",
     }
 )
 
+# -----------------------
+# Full app layout
+# -----------------------
+app.layout = html.Div(
+    [
+        banner,
 
-# Adjust sidebar to sit BELOW banner
-sidebar.style.update({
-    "top": BANNER_HEIGHT
-})
-
-app.layout = html.Div([
-    banner,
-    sidebar,
-    store_bins,
-    store_overlay,
-
-    # PAGE WRAPPER (flex column)
-    html.Div(
-        [
-            # MAIN CONTENT
-            html.Div(
-                dbc.Card(
+        html.Div(
+            [
+                # Sidebar + main content row
+                html.Div(
                     [
-                        dbc.CardHeader("Dynamic Coordinate System Plots"),
-                        dbc.CardBody(
-                            [
-                                html.Div(id='coordinates-plots-container'),
-
-                                html.Div(
-                                    id='color-legend-container',
-                                    style={
-                                        "textAlign": "center",
-                                        "marginTop": "10px",
-                                        "marginBottom": "20px"
-                                    }
-                                ),
-
-                                dbc.Row(
-                                    [
-                                        dbc.Col(
-                                            dcc.Input(
-                                                id='bin-name-input',
-                                                type='text',
-                                                placeholder='Enter bin name'
-                                            ),
-                                            width=4
-                                        ),
-                                        dbc.Col(
-                                            dbc.Button(
-                                                "Create Bin",
-                                                id='create-bin-button'
-                                            ),
-                                            width=2
-                                        ),
-                                        dbc.Col(
-                                            dbc.Button(
-                                                "Inspect Bin",
-                                                id='inspect-bin-button'
-                                            ),
-                                            width=2
-                                        ),
-                                        dbc.Col(
-                                            dbc.Button(
-                                                "Overlay Points",
-                                                id='overlay-points-button'
-                                            ),
-                                            width=2
-                                        ),
-                                    ],
-                                    className="mb-3"
-                                ),
-
-                                html.H4("Bins List"),
-                                html.Div(id='bin-list-container', className="mb-3"),
-                                html.Div(id='error-message', className="mb-3"),
-                                html.Div(id='bin-table-container', className="mt-3")
-                            ]
-                        )
+                        html.Div(sidebar, style=sidebar_style),
+                        html.Div(main_content, style=main_content_style)
                     ],
-                    className="m-3"
+                    style={
+                        "display": "flex",
+                        "marginTop": BANNER_HEIGHT,
+                        "minHeight": "calc(100vh - " + BANNER_HEIGHT + ")",
+                    }
                 ),
-                style={
-                    "margin-left": "22rem",
-                    "padding": "2rem",
-                    "margin-top": BANNER_HEIGHT,
-                    "flex": "1"
-                }
-            ),
 
-            # =========================
-            # FOOTER (FULL WIDTH)
-            # =========================
-            html.Div(
-                dbc.Container(
-                    dbc.Row(
-                        [
-                            dbc.Col(
-                                "2026 Green team / SAMS",
-                                width=6,
-                                style={"fontSize": "0.8rem", "opacity": 0.6}
-                            ),
-                            dbc.Col(
-                                "Version 1.0",
-                                width=6,
-                                style={"textAlign": "right", "fontSize": "0.8rem", "opacity": 0.6}
-                            ),
-                        ]
-                    ),
-                    fluid=True
-                ),
-                style={
-                    "padding": "20px 20px",
-                    "borderTop": "1px solid #2a2a2a",
-                    "backgroundColor": "#111111",
-                    "position": "relative",
-                    "width": "100%"
-                }
-            ),
+                # Footer
+                footer,
+            ],
+            style={"display": "flex", "flexDirection": "column"}
+        ),
 
-        ],
-        style={
-            "minHeight": "100vh",
-            "display": "flex",
-            "flexDirection": "column"
-        }
-    )
-])
-
+        # Stores
+        store_bins,
+        store_overlay,
+    ]
+)
 
 ##############################
 # CATEGORICAL OPTIONS CALLBACK
@@ -724,13 +884,16 @@ def update_multiple_coord_plots(
                 dcc.Graph(
                     id={"type":"scatter-plot","index":cs},
                     figure=fig,
-                    config={"responsive": True},
+                    config={"responsive": False},
+                    #config={"responsive": True},
+
                     style={"height": "100%", "width": "100%"}
                 ),
                 style={
                     "height": f"{graph_height}px",
                     "resize": "both",
-                    "overflow": "auto",
+                    #"overflow": "auto",
+                    "overflow": "hidden",
                     "border": "1px solid #444"
                 }
             )
@@ -880,7 +1043,6 @@ def update_multiple_coord_plots(
 
     return row_comps, legend_component
 
-
 ##############################
 # OVERLAY POINTS CALLBACK
 ##############################
@@ -958,6 +1120,7 @@ def overlay_points(
     ],
     prevent_initial_call=True
 )
+
 def handle_bin_operations(
     create_clicks, inspect_clicks, export_clicks,
     all_sel, bin_name, bins_data,
@@ -1163,7 +1326,26 @@ def handle_bin_operations(
         ])
     ], style={"color":"white","border":"1px solid #fff"})
 
-    return bins_data, error_message, table_content, bin_list_table
+    bin_list_group = dbc.ListGroup(
+        [
+            dbc.ListGroupItem(
+                [
+                    html.Div([
+                        html.Strong(b["bin_name"], style={"fontSize": "1rem"}),
+                        html.Span(f" — {', '.join(b['coordinate_systems'])}", style={"marginLeft": "10px", "color": "#ccc"}),
+                    ], style={"marginBottom": "4px"}),
+                    html.Div([
+                        html.Small(f"Polygons: {len(b['polygons'])}", style={"color": "#999"}),
+                    ])
+                ],
+                color="dark",
+                className="mb-1"
+            )
+            for b in bins_data
+        ]
+    )
+
+    return bins_data, error_message, table_content, bin_list_group
 
 if __name__ == '__main__':
     app.run(debug=False)
