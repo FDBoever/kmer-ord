@@ -263,7 +263,7 @@ def build_dynamic_sidebar(feature_info):
     input_style = {
         "backgroundColor": "#252525",
         "background": "#383B3E",
-        "border": "1px solid #2f2f2f",
+        "border": "1px solid #5f5f5f",
         "color": "#e5e5e5",
         "fontSize": "0.8rem",
     }
@@ -287,8 +287,8 @@ def build_dynamic_sidebar(feature_info):
             id="coordinate-systems-checklist",
             options=[{"label": cs, "value": cs} for cs in coord_opts],
             multi=True,
+            searchable=False,
             placeholder="Select DR methods",
-            style=input_style,
         ),
 
         dbc.Label("Color By", className="small mt-3"),
@@ -299,7 +299,7 @@ def build_dynamic_sidebar(feature_info):
                 for f in feature_info
             ],
             placeholder="Select feature",
-            style=input_style,
+            searchable=False,
         ),
 
         dbc.Label("Color Palette", className="small mt-3"),
@@ -313,7 +313,7 @@ def build_dynamic_sidebar(feature_info):
                 {"label": "glasbey", "value": "glasbey"},
             ],
             value="viridis",
-            style=input_style,
+            searchable=False,
         ),
 
         dbc.Label("Pixel Spread", className="small mt-3"),
@@ -422,13 +422,14 @@ def build_dynamic_sidebar(feature_info):
         "padding": "1.5rem 1rem",
         "overflowY": "auto",
         "backgroundColor": "#32383E",
-        "borderRight": "1px solid #2a2a2a"}
+        "borderRight": "1px solid #181818"}
 
     return html.Div(children, style=sidebar_style, className="sidebar")
 
 ##############################
 # APP INITIALIZATION
 ##############################
+
 external_stylesheets = [
     dbc.themes.SLATE,
     "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css"
@@ -496,7 +497,7 @@ def make_count_badges(db_path):
             dbc.Badge(f"Categorical: {cat_count}",color=None, style=badge_style,),
         ],
         style={
-            "marginBottom": "1rem",
+            #"marginBottom": "1rem",
             "paddingTop": "1rem",
             "paddingLeft": "1rem",
             #"marginLeft": "18rem",  # align with main content
@@ -507,10 +508,10 @@ count_badges = make_count_badges(db_path)
 
 
 # Adjust sidebar to sit BELOW banner
-sidebar.style.update({
-    "top": BANNER_HEIGHT,
-    "height": f"calc(100vh - {BANNER_HEIGHT})",
-})
+#sidebar.style.update({
+#    "top": BANNER_HEIGHT,
+#    "height": f"calc(100vh - {BANNER_HEIGHT})",
+#})
 
 ##############################
 # APP LAYOUT
@@ -558,9 +559,11 @@ banner = html.Div(
                                                  "FDBoever/kmer-ord"],
                                                 href="https://github.com/FDBoever/kmer-ord",
                                                 target="_blank",
-                                                color="secondary",
-                                                className="me-2",
+                                                #color="secondary",
+                                                #className="me-2",
                                                 style={"fontSize": "0.7rem",
+                                                       "background": "rgb(69, 95, 177)",
+                                                       "color": "#fff",
                                                        "padding": "6px 7px",
                                                        "borderRadius": "4px"},
                                             ),
@@ -591,9 +594,6 @@ banner = html.Div(
     },
 )
 
-# -----------------------
-# Sidebar + Main content styles
-# -----------------------
 sidebar_style = {
     "flex": f"0 0 {SIDEBAR_WIDTH}",
     "maxWidth": SIDEBAR_WIDTH,
@@ -603,20 +603,15 @@ sidebar_style = {
 
 main_content_style = {
     "flex": "1 1 auto",
-    "overflow": "hidden",  # stop plots from forcing flex expansion
+    "overflow": "hidden",
     "display": "flex",
     "paddingRight": "2rem",
     "flexDirection": "column",
 }
 
-# -----------------------
-# Sidebar (normal flow)
-# -----------------------
 sidebar = build_dynamic_sidebar(feature_info)
 
-# -----------------------
-# Main content wrapper
-# -----------------------
+
 main_content = html.Div(
     [
         count_badges,
@@ -673,9 +668,7 @@ main_content = html.Div(
     style=main_content_style
 )
 
-# -----------------------
-# Footer
-# -----------------------
+
 footer = html.Div(
     dbc.Container(
         dbc.Row(
@@ -697,8 +690,6 @@ footer = html.Div(
 )
 
 # -----------------------
-# Full app layout
-# -----------------------
 app.layout = html.Div(
     [
         banner,
@@ -706,29 +697,23 @@ app.layout = html.Div(
         html.Div(
             [
                 # Sidebar + main content row
-                html.Div(
-                    [
-                        html.Div(sidebar, style=sidebar_style),
-                        html.Div(main_content, style=main_content_style)
-                    ],
-                    style={
-                        "display": "flex",
-                        "marginTop": BANNER_HEIGHT,
-                        "minHeight": "calc(100vh - " + BANNER_HEIGHT + ")",
-                    }
+                html.Div([html.Div(sidebar, style=sidebar_style),
+                          html.Div(main_content, style=main_content_style)],
+                    style={"display": "flex",
+                           "marginTop": BANNER_HEIGHT,
+                           "minHeight": "calc(100vh - " + BANNER_HEIGHT + ")"}
                 ),
-
-                # Footer
                 footer,
             ],
+            className="dbc",
             style={"display": "flex", "flexDirection": "column"}
         ),
-
-        # Stores
         store_bins,
         store_overlay,
     ]
 )
+
+
 
 ##############################
 # CATEGORICAL OPTIONS CALLBACK
@@ -1185,6 +1170,7 @@ def handle_bin_operations(
                     data=sub_df.to_dict("records"),
                     page_size=10,
                     style_table={"overflowX":"auto"},
+                    style_as_list_view=True,
                     #style_header={"backgroundColor":"#343a40","color":"white"},
                     #style_data={"backgroundColor":"#2b2b2b","color":"white"},
                 )
