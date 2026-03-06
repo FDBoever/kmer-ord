@@ -74,7 +74,8 @@ output_dir_default = args.output_dir
 # UTILS
 ##############################
 def get_connection(db_path):
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
     conn.enable_load_extension(True)
     try:
         conn.execute("SELECT load_extension('mod_spatialite');")
@@ -83,62 +84,61 @@ def get_connection(db_path):
     return conn
 
 def get_features_columns(db_path):
-    conn = sqlite3.connect(db_path)
+    conn = get_connection(db_path)
     try:
-        cursor = conn.cursor()
-        cursor.execute("PRAGMA table_info(features);")
-        columns = [row[1] for row in cursor.fetchall()]
+        rows = conn.execute("PRAGMA table_info(features);").fetchall()
+        columns = [row["name"] for row in rows]
     finally:
         conn.close()
+
     return columns
 
-def parse_feature_types(db_path, nrows=5):
-    conn = sqlite3.connect(db_path)
-    query = f"SELECT * FROM features LIMIT {nrows};"
-    df_sample = pd.read_sql_query(query, conn)
-    conn.close()
-    columns = [c for c in df_sample.columns if c != 'sequence_id']
+
+def parse_feature_types(db_path):
+    conn = get_connection(db_path)
+    rows = conn.execute("PRAGMA table_info(features)").fetchall()
     feature_info = []
-    for col in columns:
-        col_data = df_sample[col].dropna()
-        if col_data.empty:
-            col_type = 'categorical'
+
+    for r in rows:
+        col = r["name"]
+        if col == "sequence_id":
+            continue
+        t = r["type"].upper()
+
+        if any(x in t for x in ("INT", "REAL", "NUM", "FLOAT", "DOUBLE")):
+            col_type = "continuous"
         else:
-            try:
-                pd.to_numeric(col_data.astype(str))
-                col_type = 'continuous'
-            except ValueError:
-                col_type = 'categorical'
-        feature_info.append({'column_name': col, 'type': col_type})
+            col_type = "categorical"
+
+        feature_info.append({"column_name": col,
+                             "type": col_type})
+    conn.close()
     return feature_info
 
+
 def get_available_coordinate_systems(db_path):
-    """
-    Return a list of coordinate system names (geometry columns) in the coordinates table,
-    excluding primary keys or internal Spatialite columns.
-    """
     conn = get_connection(db_path)
     try:
         cursor = conn.execute("PRAGMA table_info(coordinates);")
-        all_cols = cursor.fetchall()
-        coord_systems = []
-        for info in all_cols:
-            name = info[1]
-            # Skip internal, linking, or primary key columns
-            if name in ('sequence_id', 'header', 'id'):
-                continue
-            if name.lower().startswith('st_'):  # skip internal spatialite columns
-                continue
-            coord_systems.append(name)
+        coord_systems = [
+            row["name"]
+            for row in cursor.fetchall()
+            if row["name"] not in ("sequence_id", "header", "id")
+            and not row["name"].lower().startswith("st_")]
     finally:
         conn.close()
     return coord_systems
 
-def load_coordinates_from_db(db_path, coordinate_systems,
-                             feature_col=None, filter_values=None):
+
+
+def load_coordinates_from_db(db_path,
+                             coordinate_systems,
+                             feature_col=None,
+                             filter_values=None):
+
     conn = get_connection(db_path)
+
     try:
-        #select = ["c.header"]
         select = ["c.sequence_id AS header"]
         cols = set()
         if feature_col:
@@ -146,100 +146,111 @@ def load_coordinates_from_db(db_path, coordinate_systems,
         if filter_values:
             cols.update(filter_values.keys())
         for cs in coordinate_systems:
-            #select.append(f"ST_AsText(c.{cs}) AS {cs}_geom")
             select.append(f"ST_X(c.{cs}) AS x_{cs}")
             select.append(f"ST_Y(c.{cs}) AS y_{cs}")
-            
         for c in cols:
             select.append(f"f.{c} AS {c}")
-        clause = ", ".join(select)
-        query = f"""
-            SELECT {clause}
-            FROM coordinates AS c
-            JOIN features AS f ON c.sequence_id = f.sequence_id
+
+        query = f"""SELECT {', '.join(select)}
+        FROM coordinates AS c
+        JOIN features AS f
+        ON c.sequence_id = f.sequence_id
         """
+
         conds = []
+        params = []
         if filter_values:
             for col, b in filter_values.items():
+
                 if b.get("min") is not None:
-                    conds.append(f"f.{col} >= {b['min']}")
+                    conds.append(f"f.{col} >= ?")
+                    params.append(b["min"])
+
                 if b.get("max") is not None:
-                    conds.append(f"f.{col} <= {b['max']}")
+                    conds.append(f"f.{col} <= ?")
+                    params.append(b["max"])
+
                 if b.get("cat"):
-                    cats = ", ".join(f"'{v}'" for v in b["cat"])
-                    conds.append(f"f.{col} IN ({cats})")
+                    placeholders = ",".join(["?"] * len(b["cat"]))
+                    conds.append(f"f.{col} IN ({placeholders})")
+                    params.extend(b["cat"])
+
         if conds:
             query += " WHERE " + " AND ".join(conds)
-        df = pd.read_sql_query(query, conn)
+
+        df = pd.read_sql_query(query, conn, params=params)
+
+        # reduce memory usage
         for cs in coordinate_systems:
-            geom = f"{cs}_geom"
-            if geom in df:
-                df[[f"x_{cs}", f"y_{cs}"]] = (
-                    df[geom]
-                      .str.extract(r'POINT\(([-\d.]+)\s+([-.\d]+)\)')
-                      .astype(float)
-                )
-        df.drop(columns=[f"{cs}_geom" for cs in coordinate_systems],
-                inplace=True, errors='ignore')
-        keep = ["header"]
-        for cs in coordinate_systems:
-            keep += [f"x_{cs}", f"y_{cs}"]
-        keep += list(cols)
-        df = df[keep]
+            df[f"x_{cs}"] = df[f"x_{cs}"].astype("float32")
+            df[f"y_{cs}"] = df[f"y_{cs}"].astype("float32")
     finally:
         conn.close()
     return df
 
 def get_number_of_reads(db_path):
-    conn = sqlite3.connect(db_path)
+    conn = get_connection(db_path)
     try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM features;")
-        count = cursor.fetchone()[0]
+        count = conn.execute("SELECT COUNT(*) AS cnt FROM features;").fetchone()["cnt"]
     finally:
         conn.close()
     return count
 
 
 def get_number_of_ordinations(db_path):
-    coord_systems = get_available_coordinate_systems(db_path)
-    return len(coord_systems)
+    return len(get_available_coordinate_systems(db_path))
 
 #---- plotting utils ----
 def create_datashader_image(df, x_col, y_col,
                             color_col=None, color_palette="viridis",
-                            px_spread=3):
-    # Resolution: change plot_width/plot_height to adjust image size
-    cvs = ds.Canvas(plot_width=2000, plot_height=2000)
-    if color_col and color_col in df:
+                            px_spread=3,
+                            plot_width=1500, plot_height=1500):
+    df_ds = pd.DataFrame({
+        'x': df[x_col].to_numpy(dtype='float32'),
+        'y': df[y_col].to_numpy(dtype='float32')
+    })
+    
+    cvs = ds.Canvas(plot_width=plot_width, plot_height=plot_height)
+    
+    if color_col is not None and color_col in df:
         if pd.api.types.is_numeric_dtype(df[color_col]):
-            agg = cvs.points(df, x_col, y_col, ds.mean(color_col))
-            cmap = cm.get_cmap(color_palette) if color_palette in plt.colormaps() else cm.get_cmap("viridis")
-            cmap_list = [matplotlib.colors.rgb2hex(cmap(i)) for i in range(cmap.N)]
-            img = tf.shade(agg, cmap=cmap_list, how='linear')
-        else:
-            df[color_col] = df[color_col].astype('category')
-            cats = df[color_col].cat.categories
-            if color_palette == 'Category10':
-                palette = bokeh.palettes.Category10[10]
-            elif color_palette == 'glasbey':
-                palette = glasbey[:len(cats)]
+            df_ds['val'] = df[color_col].to_numpy(dtype='float32')
+            agg = cvs.points(df_ds, x='x', y='y', agg=ds.mean('val'))
+            
+            if color_palette in plt.colormaps():
+                cmap = plt.get_cmap(color_palette)
             else:
-                palette = [matplotlib.colors.rgb2hex(cm.get_cmap(color_palette)(i)) for i in range(256)]
-            if len(cats) > len(palette):
-                palette = glasbey[:len(cats)]
-            key = dict(zip(cats, palette))
-            agg = cvs.points(df, x_col, y_col, ds.count_cat(color_col))
+                cmap = plt.get_cmap("viridis")
+            cmap_list = [matplotlib.colors.rgb2hex(cmap(i)) for i in range(cmap.N)]
+            
+            img = tf.shade(agg, cmap=cmap_list, how='linear')
+        
+        else:
+            cat = df[color_col].astype("category")
+            df_ds['cat_code'] = cat.cat.codes.values
+            categories = cat.cat.categories
+            
+            if color_palette == "Category10":
+                palette = bokeh.palettes.Category10[10]
+            elif color_palette == "glasbey":
+                palette = glasbey[:len(categories)]
+            else:
+                cmap = plt.get_cmap(color_palette) if color_palette in plt.colormaps() else plt.get_cmap("viridis")
+                palette = [matplotlib.colors.rgb2hex(cmap(i)) for i in range(256)]
+                if len(categories) > len(palette):
+                    palette = glasbey[:len(categories)]
+            
+            key = dict(zip(categories, palette))
+            agg = cvs.points(df_ds, x='x', y='y', agg=ds.count_cat('cat_code'))
             img = tf.shade(agg, color_key=key, how='eq_hist')
+    
     else:
-        agg = cvs.points(df, x_col, y_col, ds.count())
-        img = tf.shade(agg, cmap=fire, how='eq_hist')
-
-    # Make points appear larger
-    if px_spread is None or px_spread <= 0:
-        px_spread = 1
-    img = tf.spread(img, px=int(px_spread))
-
+        agg = cvs.points(df_ds, x='x', y='y', agg=ds.count())
+        cmap = cm.get_cmap("plasma")
+        img = tf.shade(agg, cmap=[matplotlib.colors.rgb2hex(cmap(i)) for i in range(cmap.N)], how='eq_hist')
+        #img = tf.shade(agg, cmap="fire", how='eq_hist')
+    
+    img = tf.spread(img, px=max(int(px_spread), 1))
     return img.to_pil()
 
 
@@ -259,7 +270,6 @@ def build_dynamic_sidebar(feature_info):
         "letterSpacing": "1px",
         "opacity": 0.5,
         "marginBottom": "0.6rem",
-        "marginTop": "1.4rem",
     }
 
     input_style = {
@@ -788,15 +798,19 @@ def update_multiple_coord_plots(
     if n_plots == 1:
         plots_per_row = 1
         graph_height = 800
+        graph_width = 800
     elif n_plots == 2:
         plots_per_row = 2
         graph_height = 600
+        graph_width = 600
     elif n_plots == 3:
         plots_per_row = 3
         graph_height = 500
+        graph_width = 500
     else:
         plots_per_row = 3
         graph_height = 400
+        graph_width = 400
 
     rows = ceil(n_plots / plots_per_row)
     row_comps = []
@@ -856,14 +870,22 @@ def update_multiple_coord_plots(
                 })
 
             fig.update_layout(
-                title=f"{cs} Plot",
+                #title=f"{cs} Plot",
                 dragmode='lasso',
-                height=graph_height,
+                #height=graph_height,
+                #width=graph_width,
+                yaxis_scaleanchor="x",
                 xaxis=dict(visible=False,
-                           range=[df[xcol].min(), df[xcol].max()]),
+                           range=[df[xcol].min(), df[xcol].max()],
+                           autorange=False,
+                           constrain='domain'),
                 yaxis=dict(visible=False,
-                           range=[df[ycol].min(), df[ycol].max()]),
-                margin=dict(l=0, r=0, t=30, b=0)
+                           range=[df[ycol].min(), df[ycol].max()],
+                           autorange=False,
+                           constrain='domain'),
+                #margin=dict(l=0, r=0, t=30, b=0)
+                margin=dict(l=10, r=10, t=10, b=10)
+
             )
 
             # Wrap graph in a resizable container
@@ -871,13 +893,16 @@ def update_multiple_coord_plots(
                 dcc.Graph(
                     id={"type":"scatter-plot","index":cs},
                     figure=fig,
-                    config={"responsive": False},
-                    #config={"responsive": True},
-
+                    #config={"responsive": False},
+                    config={"responsive": True},
+                    #style={"height": f"{graph_height}px", "width": f"{graph_width}px"}
                     style={"height": "100%", "width": "100%"}
                 ),
                 style={
-                    "height": f"{graph_height}px",
+                    #"height": f"{graph_height}px",
+                    #"width": f"{graph_width}px",
+                    "width": "100%",
+                    "aspectRatio": "1 / 1",
                     "resize": "both",
                     #"overflow": "auto",
                     "overflow": "hidden",
@@ -1333,7 +1358,7 @@ def handle_bin_operations(
         ]
     )
 
-    return bins_data, error_message, table_content, bin_list_group
+    return bins_data, error_message, table_content, bin_list_table
 
 if __name__ == '__main__':
     app.run(debug=False)
