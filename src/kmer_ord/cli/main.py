@@ -1,6 +1,5 @@
 # src/kmer_ord/cli/main.py
 from kmer_ord.workflow.operations import MatrixPreprocessing
-from kmer_ord.workflow.operations import MatrixPreprocessing
 import typer
 from pathlib import Path
 from kmer_ord.workflow import context
@@ -8,7 +7,7 @@ from kmer_ord.workflow.context import Context
 from kmer_ord.workflow.runner import Runner
 from kmer_ord.utils.logging_utils import section, info, warn
 from kmer_ord.cli.setup import setup_app
-
+from kmer_ord.utils.threading import set_global_threads
 #app = typer.Typer(add_completion=False, rich_markup_mode=None)
 app = typer.Typer(add_completion=False,
                   context_settings={"help_option_names": ["-h", "--help"]})
@@ -47,7 +46,12 @@ def run_pipeline(
     """
     print("-" * 70)
     section("Starting kmer-ord projection pipeline...")
+    
+    set_global_threads(threads)
+    info(f"Using {threads} threads")
+
     info("loading packages")
+
     from kmer_ord.io.sequence import fastq_to_fasta
     from kmer_ord.io.summary import calculate_stats
     from kmer_ord.workflow.operations import (
@@ -65,11 +69,6 @@ def run_pipeline(
         KmerCount(kmer_length=kmer_length, threads=threads),
         KmerMetrics(chunksize=1000, cpus=threads),
         Tiara(threads=threads),
-        #DimensionalityReduction(methods=method_list, normalisations=norm_list,
-        #                        dims=dims, pca_dim_red=pca_pre, 
-        #                        keep_pcs=keep_pcs, keep_variance=keep_variance,
-        #                        screen_params=screen_params, 
-        #                        scale=scale),
         MatrixPreprocessing(
             normalisations=norm_list,
             pca_dim_red=pca_pre,
@@ -135,12 +134,17 @@ def discover_pipeline(
     """
     print("-" * 70)
     section("Starting kmer-ord clustering pipeline...")
+    
+    set_global_threads(threads)
+    info(f"Using {threads} threads")
+
     info("loading packages")
     from kmer_ord.workflow.operations import (
         FastqToFasta,
         FastaStats,
         KmerCount,
         KmerMetrics,
+        MatrixPreprocessing,
         DimensionalityReduction,
         Clustering,
         AddClusteringToDB)
@@ -226,6 +230,8 @@ def visualise_db(
     """
     print("-" * 70)
     section("Starting kmer-ord visualisation...")
+    #set_global_threads(threads)
+    #info(f"Using {threads} threads")
     info("loading packages")
 
     from kmer_ord.workflow.operations import PlotFeatures, PlotEmbeddings
@@ -343,10 +349,15 @@ def dr_cmd(
     pca_pre: bool = typer.Option(False, "--pca-pre", help="Apply PCA before DR"),
     keep_pcs: int = typer.Option(None, "--keep-pcs"),
     keep_variance: float = typer.Option(None, "--keep-variance"),
-    screen_params: bool = typer.Option(False, "--screen_params", help="Run parameter screening for supported DR methods"),):
+    screen_params: bool = typer.Option(False, "--screen_params", help="Run parameter screening for supported DR methods"),
+    threads: int = typer.Option(4, "-t","--threads", help="Number of threads"),
+):
     """
     Run dimensionality reduction on an existing k-mer matrix.
     """
+    set_global_threads(threads)
+    info(f"Using {threads} threads")
+    
     from kmer_ord.workflow.operations import DimensionalityReduction
 
     context = Context(input, output_dir, force=force)

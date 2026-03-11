@@ -2,8 +2,6 @@
 from pathlib import Path
 from typing import Dict
 import logging
-from kmer_ord.io.sequence import load_fasta_or_convert
-
 
 class Context:
     """
@@ -25,6 +23,7 @@ class Context:
     }
 
     def __init__(self, input_file: Path, output_dir: Path, force: bool = False):
+        from kmer_ord.io.sequence import load_fasta_or_convert
         self.input_file: Path = Path(input_file)
         self.output_dir: Path = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
