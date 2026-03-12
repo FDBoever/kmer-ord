@@ -1,18 +1,46 @@
 # src/kmer_ord/cli/main.py
-from kmer_ord.workflow.operations import MatrixPreprocessing
 import typer
 from pathlib import Path
-from kmer_ord.workflow import context
+import platform
+import datetime
+
 from kmer_ord.workflow.context import Context
 from kmer_ord.workflow.runner import Runner
 from kmer_ord.utils.logging_utils import section, info, warn
 from kmer_ord.cli.setup import setup_app
 from kmer_ord.utils.threading import set_global_threads
+
 #app = typer.Typer(add_completion=False, rich_markup_mode=None)
 app = typer.Typer(add_completion=False,
                   context_settings={"help_option_names": ["-h", "--help"]})
 
 app.add_typer(setup_app)
+
+
+#----- header util
+
+def print_header(start_time):
+    from importlib.metadata import version
+    width = 70
+    v = version("kmer-ord")
+
+    print()
+    print("=" * width)
+    print("kmer-ord".center(width))
+    print(f"version {v}".center(width))
+    print("Pipeline for projecting kmer profiles in lower dimensional space".center(width))
+    print("=" * width)
+    print(f"Run started: {start_time.isoformat(timespec='seconds')}")
+    print(f"Python: {platform.python_version()}")
+    print("=" * width)
+
+def format_timedelta(td: "datetime.timedelta") -> str:
+    total_seconds = td.total_seconds()
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    milliseconds = int((seconds - int(seconds)) * 1000)
+    return f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d}.{milliseconds:03d}"
+
 
 # -----------------------------
 # Pipeline
@@ -44,10 +72,10 @@ def run_pipeline(
     Results are stored in the database for dowstream exploration and annotation.
     | fastq -> fasta -> sequence stats -> kmer-counting -> DR -> database |
     """
-    print("-" * 70)
-    section("Starting kmer-ord projection pipeline...")
-    
+    start_time = datetime.datetime.now()
+    print_header(start_time)    
     set_global_threads(threads)
+
     info(f"Using {threads} threads")
 
     info("loading packages")
@@ -55,7 +83,7 @@ def run_pipeline(
     from kmer_ord.io.sequence import fastq_to_fasta
     from kmer_ord.io.summary import calculate_stats
     from kmer_ord.workflow.operations import (
-        FastqToFasta, FastaStats, KmerCount, KmerMetrics, Tiara,
+        FastqToFasta, FastaStats, KmerCount, KmerMetrics, Tiara, MatrixPreprocessing,
         DimensionalityReduction, FeatureMerge, SpatialiteDatabase)
 
     context = Context(input, output_dir, force=force)
@@ -98,8 +126,13 @@ def run_pipeline(
                 typer.echo(f"    - {p}")
         else:
             typer.echo(f"  {name}: {path}")
+    
+    end_time = datetime.datetime.now()
+    duration = end_time - start_time
+
     print("-" * 70)
-    section("Done.")
+    print(f"Finished: {end_time.isoformat(timespec='seconds')}")
+    print(f"Total runtime: {format_timedelta(duration)}")
     print("-" * 70)
 
  
@@ -132,7 +165,9 @@ def discover_pipeline(
     integrated into the database for downstream analysis.
     | kmer-profiles -> High-D embedding -> clustering -> database |
     """
-    print("-" * 70)
+    start_time = datetime.datetime.now()
+    print_header(start_time)
+
     section("Starting kmer-ord clustering pipeline...")
     
     set_global_threads(threads)
@@ -211,8 +246,13 @@ def discover_pipeline(
                 typer.echo(f"    - {p}")
         else:
             typer.echo(f"  {name}: {path}")
+    
+    end_time = datetime.datetime.now()
+    duration = end_time - start_time
+
     print("-" * 70)
-    section("Done.")
+    print(f"Finished: {end_time.isoformat(timespec='seconds')}")
+    print(f"Total runtime: {format_timedelta(duration)}")
     print("-" * 70)
 
 
@@ -228,6 +268,9 @@ def visualise_db(
     - Feature distributions and categorical comparisons
     - Embedding visualisations (UMAP, t-SNE, etc.)
     """
+    start_time = datetime.datetime.now()
+    print_header(start_time) 
+
     print("-" * 70)
     section("Starting kmer-ord visualisation...")
     #set_global_threads(threads)
@@ -250,8 +293,13 @@ def visualise_db(
         plot_embeddings.run(ctx)
 
     info(f"All plots saved to: {ctx.output_dir / 'plots'}")
+    end_time = datetime.datetime.now()
+    duration = end_time - start_time
+
     print("-" * 70)
-    section("Done.")
+    print(f"Finished: {end_time.isoformat(timespec='seconds')}")
+    print(f"Total runtime: {format_timedelta(duration)}")
+    print("-" * 70)
 
 
 # -----------------------------
