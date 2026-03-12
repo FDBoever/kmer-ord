@@ -2,6 +2,7 @@
 import numpy as np
 import pandas as pd
 from pathlib import Path
+from kmer_ord.utils.logging_utils import section, info, warn
 #from umap import UMAP
 
 # methods supporting parameter screening
@@ -58,16 +59,16 @@ def _run_single_method(
     import pandas as pd
     import scipy.sparse as sparse
     from sklearn.decomposition import PCA, KernelPCA, SparsePCA
-    from sklearn.manifold import TSNE, Isomap, LocallyLinearEmbedding
+    from sklearn.manifold import TSNE, LocallyLinearEmbedding
 
     try:
         import umap
     except ImportError:
         umap = None
 
-    from trimap import TRIMAP
-    from pacmap import PaCMAP
-    from pacmap.pacmap import LocalMAP
+    #from trimap import TRIMAP
+    #from pacmap import PaCMAP
+    #from pacmap.pacmap import LocalMAP
     method = method.lower()
     params = DR_HYPERPARAMS.get(method, {}).get(scale, {})
     graph = None
@@ -84,7 +85,8 @@ def _run_single_method(
 
     elif method == "umap":
         import umap
-        model = umap.UMAP(n_components=dims, random_state=seed, **params)
+        warn("UMAP random seed is disabled to allow parallel execution.")
+        model = umap.UMAP(n_components=dims, random_state=None, **params)
         embedding = model.fit_transform(X)
         graph = getattr(model, "graph_", None)
 
@@ -272,7 +274,7 @@ def _run_parameter_screen(
     import numpy as np
     import scipy.sparse as sparse
     from sklearn.decomposition import PCA, KernelPCA, SparsePCA
-    from sklearn.manifold import TSNE, Isomap, LocallyLinearEmbedding
+    from sklearn.manifold import TSNE, LocallyLinearEmbedding
 
     try:
         import umap
