@@ -1,7 +1,6 @@
 # src/kmer_ord/dr/loader.py
 from pathlib import Path
 import pandas as pd
-import numpy as np
 
 def load_matrix(matrix_path: Path) -> pd.DataFrame:
     """
@@ -9,6 +8,7 @@ def load_matrix(matrix_path: Path) -> pd.DataFrame:
     First column is sample IDs; rest are numeric features.
     Returns pd.DataFrame with sample IDs as index.
     """
+    import numpy as np
     matrix_path = Path(matrix_path)
 
     if not matrix_path.exists():

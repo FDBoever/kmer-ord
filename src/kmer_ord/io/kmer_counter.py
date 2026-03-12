@@ -3,14 +3,8 @@ import os
 import subprocess
 import shutil
 import tempfile
-import time
-import numpy as np
-from Bio import SeqIO
-from itertools import product
-from concurrent.futures import ThreadPoolExecutor
 from kmer_ord.utils.benchmark import BenchmarkTimer
 from pathlib import Path
-import platform
 
 from kmer_ord.system.env_manager import TOOLS_ENV, run_in_env
 from kmer_ord.utils.logging_utils import section, info, warn
@@ -19,6 +13,8 @@ def format_size(size_in_bytes):
     return f"{size_in_bytes / (1024*1024):,.2f} MB".replace(",", ".")
 
 def canonical_kmers(k):
+    from itertools import product
+
     acgt = ['A', 'C', 'G', 'T']
     rev_comp = {'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C'}
     product_kmers = [''.join(p) for p in product(acgt, repeat=k)]
@@ -34,6 +30,10 @@ def run_kmer_counter(input_file, output_tsv, kmer_length, num_threads,
     """
     Run kmer-counter from TOOLS_ENV and produce TSV output with per-step benchmarking.
     """
+    import numpy as np
+    from Bio import SeqIO
+    from concurrent.futures import ThreadPoolExecutor
+
     section(f"Running k-mer counting (k={kmer_length})...")
     temp_dir = Path(tempfile.mkdtemp(prefix="kmer_counter_temp_"))
     input_args = f"--input {input_file} --kmer {kmer_length} --threads {num_threads}"

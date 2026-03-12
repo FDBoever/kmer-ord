@@ -1,17 +1,12 @@
 from os import name
 from pathlib import Path
-import sqlite3
-from sqlite3 import OperationalError
 import pandas as pd
-from Bio.SeqIO.FastaIO import SimpleFastaParser
-from Bio.SeqIO.QualityIO import FastqGeneralIterator
-
 
 # ---------------------------------------------------------
-# INITIALIZE DATABASE
-# ---------------------------------------------------------
-
 def initialize_spatialite_db(db_file: Path):
+    import sqlite3
+    from sqlite3 import OperationalError
+
     conn = sqlite3.connect(str(db_file))
     cursor = conn.cursor()
 
@@ -32,9 +27,6 @@ def initialize_spatialite_db(db_file: Path):
     conn.commit()
     return conn
 
-
-# ---------------------------------------------------------
-# FASTA TABLE
 # ---------------------------------------------------------
 
 def create_fasta_table(conn):
@@ -49,6 +41,8 @@ def create_fasta_table(conn):
 
 
 def populate_fasta_table(conn, fasta_file: Path, batch_size=50000):
+    from Bio.SeqIO.FastaIO import SimpleFastaParser
+    from Bio.SeqIO.QualityIO import FastqGeneralIterator
     cursor = conn.cursor()
 
     insert_sql = """
@@ -88,6 +82,7 @@ def populate_fasta_table(conn, fasta_file: Path, batch_size=50000):
 # ---------------------------------------------------------
 
 def create_features_table(conn, df: pd.DataFrame):
+    import pandas as pd
     cursor = conn.cursor()
 
     create_sql = "CREATE TABLE features (sequence_id TEXT PRIMARY KEY"
@@ -108,6 +103,7 @@ def create_features_table(conn, df: pd.DataFrame):
 
 
 def populate_features_table(conn, df: pd.DataFrame):
+    import pandas as pd
     cursor = conn.cursor()
 
     columns = ", ".join(df.columns)
@@ -127,6 +123,7 @@ def create_coordinates_table(conn, df: pd.DataFrame):
     """
     Create the coordinates table with proper sequence_id and geometry columns.
     """
+    import pandas as pd
     cursor = conn.cursor()
 
     # Use sequence_id as primary key
@@ -184,6 +181,7 @@ def populate_coordinates_table(conn, df: pd.DataFrame, methods):
     """
     Populate the coordinates table using sequence_id strings instead of numeric indices.
     """
+    import pandas as pd
     cursor = conn.cursor()
     conn.execute("BEGIN TRANSACTION;")
 
@@ -225,6 +223,7 @@ def populate_coordinates_table(conn, df: pd.DataFrame, methods):
 # DR EMBEDDINGS TABLES
 # -----------------------------
 def save_dr_embeddings(conn, df: pd.DataFrame, method_name: str, force: bool = False):
+    import pandas as pd
     table_name = f"embedding_{method_name.lower()}"
 
     # Check if table exists
@@ -252,6 +251,8 @@ def save_clustering_results(conn: sqlite3.Connection, cluster_files: list[Path],
     """
     Merge multiple clustering result files into a single flat table and save as 'Clustering'.
     """
+    import sqlite3
+    import pandas as pd
     dfs = [pd.read_csv(f, sep="\t") for f in cluster_files]
     merged_df = pd.concat(dfs, axis=1)
 
@@ -274,6 +275,8 @@ def add_dr_and_clusters_to_db(db_path: Path, embedding_files: list[Path], cluste
     Opens (or creates) DB, adds DR embedding tables and a single Clustering table.
     Returns the sqlite3 connection path.
     """
+    import sqlite3
+    import pandas as pd
     conn = sqlite3.connect(str(db_path))
 
     # Save embeddings
@@ -305,6 +308,8 @@ def inspect_database(db_file: Path, limit: int = 5):
     - Clustering
     Shows the first `limit` rows for each table.
     """
+    import sqlite3
+    import pandas as pd
     conn = sqlite3.connect(str(db_file))
     cursor = conn.cursor()
 

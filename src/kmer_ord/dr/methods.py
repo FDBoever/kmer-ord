@@ -1,20 +1,7 @@
 # src/kmer_ord/dr/methods.py
-
-from pathlib import Path
-import pandas as pd
 import numpy as np
-import scipy.sparse as sparse
-from sklearn.decomposition import PCA, KernelPCA, SparsePCA
-from sklearn.manifold import TSNE, Isomap, LocallyLinearEmbedding
-
-try:
-    import umap
-except ImportError:
-    umap = None
-
-from trimap import TRIMAP
-from pacmap import PaCMAP
-from pacmap.pacmap import LocalMAP
+import pandas as pd
+from pathlib import Path
 #from umap import UMAP
 
 # methods supporting parameter screening
@@ -68,7 +55,19 @@ def _run_single_method(
     seed: int,
     scale: str = "default",
 ):
+    import pandas as pd
+    import scipy.sparse as sparse
+    from sklearn.decomposition import PCA, KernelPCA, SparsePCA
+    from sklearn.manifold import TSNE, Isomap, LocallyLinearEmbedding
 
+    try:
+        import umap
+    except ImportError:
+        umap = None
+
+    from trimap import TRIMAP
+    from pacmap import PaCMAP
+    from pacmap.pacmap import LocalMAP
     method = method.lower()
     params = DR_HYPERPARAMS.get(method, {}).get(scale, {})
     graph = None
@@ -160,7 +159,8 @@ def run_dr_methods(
     graph_paths : list[Path]
         List of graph files saved (may be empty)
     """
-
+    import pandas as pd
+    import numpy as np
     # -----------------------------
     # Sequence IDs
     # -----------------------------
@@ -267,6 +267,21 @@ def _run_parameter_screen(
     Saves individual files for each parameter combination with sequence_id column.
     Returns list of saved paths.
     """
+
+    import pandas as pd
+    import numpy as np
+    import scipy.sparse as sparse
+    from sklearn.decomposition import PCA, KernelPCA, SparsePCA
+    from sklearn.manifold import TSNE, Isomap, LocallyLinearEmbedding
+
+    try:
+        import umap
+    except ImportError:
+        umap = None
+
+    from trimap import TRIMAP
+    from pacmap import PaCMAP
+    from pacmap.pacmap import LocalMAP
 
     output_paths = []
 

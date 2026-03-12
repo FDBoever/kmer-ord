@@ -1,14 +1,14 @@
 # src/kmer_ord/dr/preprocess.py
-import numpy as np
 import pandas as pd
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
 
 def preprocess_data(df: pd.DataFrame, method: str) -> pd.DataFrame:
     """
     Apply normalization to k-mer matrix (DataFrame of numeric k-mer counts).
     Returns a DataFrame (rows = samples, columns = features), preserving sample IDs.
     """
+    import numpy as np
+    import pandas as pd
+    from sklearn.preprocessing import StandardScaler
 
     X = df.copy().astype(np.float32)  # ensure float32
 
@@ -48,6 +48,9 @@ def reduce_dimensions_with_pca(df: pd.DataFrame,
     Apply PCA reduction to a DataFrame either by fixed number of PCs
     or by cumulative variance threshold. Returns DataFrame with sample IDs as index.
     """
+    import numpy as np
+    import pandas as pd
+    from sklearn.decomposition import PCA
 
     if keep_pcs is None and keep_variance is None:
         raise ValueError("Either keep_pcs or keep_variance must be specified.")

@@ -1,8 +1,4 @@
 # kmer_ord/cluster/leiden.py
-import numpy as np
-import igraph as ig
-import leidenalg
-from tqdm import tqdm
 
 def run_leiden(A, resolution=1.0, n_iterations=-1, seed=42):
     """
@@ -12,6 +8,10 @@ def run_leiden(A, resolution=1.0, n_iterations=-1, seed=42):
         labels : np.ndarray
         modularity : float
     """
+    import numpy as np
+    import leidenalg
+    import igraph as ig
+    
     if A.nnz == 0:
         print("[Warning] Graph has no edges. Cannot run Leiden.")
         return np.array([]), np.nan
@@ -30,8 +30,7 @@ def run_leiden(A, resolution=1.0, n_iterations=-1, seed=42):
             weights=g.es["weight"],
             resolution_parameter=resolution,
             n_iterations=n_iterations,
-            seed=seed
-        )
+            seed=seed)
         labels = np.array(partition.membership)
         modularity = g.modularity(labels, weights=g.es["weight"])
         return labels, modularity
@@ -48,6 +47,9 @@ def leiden_resolution_sweep(A, resolutions=None, n_iterations=-1, seed=42):
         results : dict
             resolution -> (labels, modularity)
     """
+    import numpy as np
+    from tqdm import tqdm
+
     if resolutions is None:
         resolutions = np.linspace(0.01, 1.0, 10)
 

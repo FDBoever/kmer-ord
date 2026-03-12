@@ -1,7 +1,7 @@
 # src/kmer_ord/io/summary.py
 from pathlib import Path
-from Bio import SeqIO
-import pandas as pd
+# from Bio import SeqIO
+# import pandas as pd
 import statistics
 from kmer_ord.workflow.context import Context
 from kmer_ord.utils.logging_utils import section, info, warn
@@ -39,6 +39,8 @@ def calculate_stats(context: Context):
         tsv_file : Path
     """
     section("Calculating per-sequence statistics...")
+    from Bio import SeqIO
+    import pandas as pd
     fasta_file = context.get("fasta")
 
     sequences = {r.id: str(r.seq) for r in SeqIO.parse(str(fasta_file), "fasta")}

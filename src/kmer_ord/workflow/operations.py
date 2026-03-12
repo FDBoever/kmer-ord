@@ -2,9 +2,9 @@
 from pathlib import Path
 from kmer_ord.workflow import context
 import typer
-import pandas as pd
-import numpy as np
-import importlib.resources as pkg_resources
+#import pandas as pd
+#import numpy as np
+#import importlib.resources as pkg_resources
 
 from kmer_ord.io.summary import calculate_stats
 from kmer_ord.io.kmer_counter import run_kmer_counter
@@ -105,6 +105,7 @@ class MatrixPreprocessing(Operation):
         self.max_memory_gb = max_memory_gb
 
     def run(self, context):
+        import numpy as np
         # Load full matrix including sequence_id column
         matrix_path = context.get("kmer_matrix")
         matrix = load_matrix(matrix_path)
@@ -186,7 +187,7 @@ class DimensionalityReduction(Operation):
         self.max_memory_gb = max_memory_gb
 
     def run(self, context):
-
+        import numpy as np
         matrix_paths = context.get("preprocessed_matrices")
         seqid_paths = context.get("preprocessed_sequence_ids")
         dr_dir = context.output_dir / "dr"
@@ -373,6 +374,7 @@ class SpatialiteDatabase(Operation):
         self.db_name = db_name
 
     def run(self, context):
+        import pandas as pd
         from kmer_ord.io.database import (initialize_spatialite_db,
                                   create_fasta_table,
                                   populate_fasta_table,
@@ -381,7 +383,7 @@ class SpatialiteDatabase(Operation):
                                   create_coordinates_table,
                                   populate_coordinates_table,
                                   inspect_database)
-        from kmer_ord.io import database
+        #from kmer_ord.io import database
         output_path = context.output_dir / self.db_name
 
         if output_path.exists() and not context.force:
@@ -473,6 +475,7 @@ class Clustering(Operation):
         self.eps = eps
 
     def run(self, context):
+        import pandas as pd
         from kmer_ord.cluster.graph import build_knn_graph
         from kmer_ord.cluster.leiden import run_leiden, leiden_resolution_sweep
         from kmer_ord.cluster.hdbscan import run_hdbscan

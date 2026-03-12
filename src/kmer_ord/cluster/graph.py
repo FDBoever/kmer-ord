@@ -1,7 +1,4 @@
 # kmer_ord/cluster/graph.py
-import numpy as np
-from scipy import sparse
-from sklearn.neighbors import NearestNeighbors
 
 def build_knn_graph(X, k=15, metric="euclidean"):
     """
@@ -21,6 +18,10 @@ def build_knn_graph(X, k=15, metric="euclidean"):
     A : scipy.sparse.csr_matrix
         Sparse adjacency matrix
     """
+    import numpy as np
+    from scipy import sparse
+    from sklearn.neighbors import NearestNeighbors
+    
     n_samples = X.shape[0]
     k = min(k, n_samples - 1)  # safety check
 

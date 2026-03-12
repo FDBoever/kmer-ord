@@ -1,6 +1,4 @@
 # kmer_ord/cluster/hdbscan.py
-import hdbscan
-import numpy as np
 
 def run_hdbscan(X, min_cluster_size=15, min_samples=None, metric="euclidean"):
     """
@@ -9,6 +7,8 @@ def run_hdbscan(X, min_cluster_size=15, min_samples=None, metric="euclidean"):
     Returns:
         labels : np.ndarray
     """
+    import hdbscan
+    
     clusterer = hdbscan.HDBSCAN(
         min_cluster_size=min_cluster_size,
         min_samples=min_samples,

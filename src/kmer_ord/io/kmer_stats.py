@@ -1,8 +1,6 @@
 import os
 import math
 import pandas as pd
-import numpy as np
-from concurrent.futures import ProcessPoolExecutor
 from kmer_ord.utils.logging_utils import section, info, warn
 
 def build_dtypes(input_file: str) -> dict:
@@ -18,6 +16,7 @@ def build_dtypes(input_file: str) -> dict:
 
 def calculate_kmer_metrics_chunk(kmer_df: pd.DataFrame) -> pd.DataFrame:
     """Compute k-mer metrics for a chunk of sequences."""
+    import numpy as np
     numeric = kmer_df.select_dtypes(include=[np.number])
     if numeric.shape[1] == 0:
         raise ValueError("No numeric k-mer columns found.")
@@ -51,6 +50,7 @@ def process_kmer_file(
     cpus: int = 1,
     total_rows: int = None,) -> pd.DataFrame:
     """Process a k-mer matrix to compute metrics, optionally parallelized."""
+    from concurrent.futures import ProcessPoolExecutor
     section("Calculating k-mer metrics")
     if output_file:
         os.makedirs(os.path.dirname(output_file), exist_ok=True)
