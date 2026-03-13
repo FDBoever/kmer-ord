@@ -163,6 +163,7 @@ def run_dr_methods(
     """
     import pandas as pd
     import numpy as np
+    import scipy.sparse as sparse
     # -----------------------------
     # Sequence IDs
     # -----------------------------
