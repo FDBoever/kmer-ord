@@ -75,7 +75,6 @@ def setup(
         ("kmer-counter", TOOLS_ENV, ["--help"]),
         ("tiara", TIARA_ENV, ["--help"]),
         ("barrnap", RDNA_ENV, ["--help"]),
-        ("cmscan", RDNA_ENV, ["--help"]),
         ("flye", RDNA_ENV, ["--help"]),
         ("minimap2", RDNA_ENV, ["--help"]),
         ("samtools", RDNA_ENV, ["--help"]),
