@@ -4,6 +4,4 @@ channels:
   - bioconda
 dependencies:
   - python=3.11
-  - barrnap
-  - infernal
   - rust

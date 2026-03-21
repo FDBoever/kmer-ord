@@ -21,7 +21,7 @@ git clone <repo-url>
 cd kmer-ord
 ```
 
-### 2. Create the conda environment
+### 2. Create a fresh conda environment
 
 Option A (recommended): use the provided `environment.yml`
 
@@ -30,7 +30,7 @@ conda env create -f environment.yml
 conda activate kmerord-env
 ```
 
-Option B: manual set upor setup
+Option B: manual setup
 
 ```bash
 conda create -n kmerord-env python=3.11 -c conda-forge

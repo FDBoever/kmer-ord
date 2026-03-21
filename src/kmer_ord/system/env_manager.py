@@ -4,12 +4,11 @@ import shutil
 #import pkg_resources
 from pathlib import Path
 from importlib.resources import files
+import tempfile
 
 from kmer_ord.utils.logging_utils import section, info, warn
 
-# -----------------------------
 # Environment constants
-# -----------------------------
 ENV_VERSION = "0.1"
 TOOLS_ENV = f"kmerord-dependencies-{ENV_VERSION}"
 TIARA_ENV = f"kmerord-tiara-{ENV_VERSION}"
@@ -17,14 +16,14 @@ TIARA_ENV = f"kmerord-tiara-{ENV_VERSION}"
 TOOLS_YAML = f"envs/kmerord-dependencies-{ENV_VERSION}.yml"
 TIARA_YAML = f"envs/kmerord-tiara-{ENV_VERSION}.yml"
 
+RDNA_ENV = f"kmerord-rdna-{ENV_VERSION}"
+RDNA_YAML = f"envs/kmerord-rdna-{ENV_VERSION}.yml"
+RDNA_REPO = "https://github.com/FDBoever/rDNA-miner"
 
-# -----------------------------
 # Utility functions
-# -----------------------------
 def conda_exists():
     """Check if conda is available in PATH."""
     return shutil.which("conda") is not None
-
 
 def env_exists(name: str) -> bool:
     """Check if a conda environment exists."""
@@ -61,9 +60,7 @@ def _create_env_from_yaml(env_name: str, yaml_file: str, recreate: bool = False)
     ], check=True)
 
 
-# -----------------------------
-# Public functions
-# -----------------------------
+# functions
 def create_tools_env(name: str = TOOLS_ENV, recreate: bool = False):
     """Create the tools environment (barrnap, infernal, rust) from YAML."""
     _create_env_from_yaml(name, TOOLS_YAML, recreate=recreate)
@@ -77,7 +74,18 @@ def run_in_env(env: str, cmd: list[str], **kwargs):
     full_cmd = ["conda", "run", "-n", env] + cmd
     subprocess.run(full_cmd, **kwargs)
 
-# -----------------------------
+def install_rdna_miner(env: str, repo_path: Path):
+    """
+    Install rDNA-miner into its environment.
+    """
+    info("Installing rDNA-miner...")
+    subprocess.run(
+        ["conda", "run", "-n", env, "pip", "install", "."],
+        cwd=str(repo_path),
+        check=True
+    )
+    info("rDNA-miner installation complete.")
+
 # Rust tool installation 
 RUST_TOOL_REPO = "https://github.com/CobiontID/kmer-counter"
 RUST_TOOL_NAME = "kmer-counter"
@@ -134,12 +142,46 @@ def install_rust_tool(env: str = TOOLS_ENV, force: bool = False):
     shutil.copy(target_bin, kmer_counter_bin)
     info(f"{RUST_TOOL_NAME} installed in {bin_dir}")
 
+
+
+def create_rdna_env(name: str = RDNA_ENV, recreate: bool = False):
+    """
+    Clone rDNA-miner and create its conda environment from its own YAML.
+    """
+    if recreate and env_exists(name):
+        info(f"{name} exists. Removing (--force enabled)...")
+        subprocess.run(["conda", "remove", "-y", "-n", name, "--all"], check=False)
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="kmerord_rdna_"))
+
+    info(f"Cloning {RDNA_REPO}...")
+    subprocess.run(
+        ["git", "clone", "--depth", "1", RDNA_REPO, str(tmp_dir)],
+        check=True
+    )
+
+    yaml_path = tmp_dir / "environment.yml"
+    if not yaml_path.exists():
+        raise FileNotFoundError("rDNA-miner environment.yml not found")
+
+    info(f"Creating {name} from rDNA-miner YAML...")
+    subprocess.run([
+        "conda", "env", "create",
+        "-f", str(yaml_path),
+        "-n", name
+    ], check=True)
+
+    return tmp_dir  # important for next step
+
 #------------------------------
-def check_tool(tool_name: str, env: str = None):
+def check_tool(tool_name: str, env: str = None, args: list[str] = None):
     """
     Check if a tool is available. If `env` is provided, run inside conda env.
     """
-    cmd = [tool_name, "--help"]
+    if args is None:
+        args = ["--help"]
+
+    cmd = [tool_name] + args
     if env:
         cmd = ["conda", "run", "-n", env] + cmd
 
@@ -148,5 +190,5 @@ def check_tool(tool_name: str, env: str = None):
         info(f"{tool_name} detected and working")
         return True
     except subprocess.CalledProcessError:
-        info(f"{tool_name} failed verification")
+        warn(f"{tool_name} failed verification")
         return False

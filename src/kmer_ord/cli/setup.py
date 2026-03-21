@@ -15,17 +15,15 @@ def setup(
     - tiara environment
     - kmer-counter Rust installation from GitHub
     """
-    from kmer_ord.system.env_manager import (TOOLS_ENV, TIARA_ENV, 
-                                             env_exists, create_tools_env, 
-                                             create_tiara_env, install_rust_tool, 
+    from kmer_ord.system.env_manager import (TOOLS_ENV, TIARA_ENV, RDNA_ENV,
+                                             env_exists, create_tools_env, create_rdna_env,
+                                             create_tiara_env, install_rust_tool, install_rdna_miner,
                                              check_tool)
 
     print("-" * 70)
     section("Starting kmerord setup...")
 
-    # -------------------------
     # Tools environment
-    # -------------------------
     if env_exists(TOOLS_ENV):
         if force:
             info(f"{TOOLS_ENV} exists. Recreating (--force enabled)...")
@@ -37,9 +35,7 @@ def setup(
         create_tools_env(TOOLS_ENV)
         info(f"{TOOLS_ENV} created.")
 
-    # -------------------------
     # Tiara environment
-    # -------------------------
     if env_exists(TIARA_ENV):
         if force:
             info(f"{TIARA_ENV} exists. Recreating (--force enabled)...")
@@ -51,22 +47,40 @@ def setup(
         create_tiara_env(TIARA_ENV)
         info(f"{TIARA_ENV} created.")
 
-    # -------------------------
     # Rust GitHub tool
-    # -------------------------
     section("Installing Rust-based tool...")
     install_rust_tool()
     info("Rust tool installation complete.")
 
-    # -------------------------
+    # rDNA-miner environment
+    section("Setting up rDNA-miner...")
+
+    if env_exists(RDNA_ENV):
+        if force:
+            info(f"{RDNA_ENV} exists. Recreating (--force enabled)...")
+            repo_path = create_rdna_env(RDNA_ENV, recreate=True)
+            install_rdna_miner(RDNA_ENV, repo_path)
+        else:
+            info(f"{RDNA_ENV} already exists. Skipping.")
+    else:
+        info(f"Creating {RDNA_ENV}...")
+        repo_path = create_rdna_env(RDNA_ENV)
+        install_rdna_miner(RDNA_ENV, repo_path)
+        info(f"{RDNA_ENV} created.")
+
     # Verify installed tools
-    # -------------------------
     section("Verifying external tools...")
 
-    tools_to_check = [("kmer-counter", TOOLS_ENV),
-                      ("tiara", TIARA_ENV),
-                      ("barrnap", TOOLS_ENV),
-                      ("cmscan", TOOLS_ENV)]
+    tools_to_check = [
+        ("kmer-counter", TOOLS_ENV, ["--help"]),
+        ("tiara", TIARA_ENV, ["--help"]),
+        ("barrnap", RDNA_ENV, ["--help"]),
+        ("cmscan", RDNA_ENV, ["--help"]),
+        ("flye", RDNA_ENV, ["--help"]),
+        ("minimap2", RDNA_ENV, ["--help"]),
+        ("samtools", RDNA_ENV, ["--help"]),
+        ("Rscript", RDNA_ENV, ["--version"]),
+    ]
     success = True
 
     success = True
