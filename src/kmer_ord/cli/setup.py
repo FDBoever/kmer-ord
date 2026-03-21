@@ -83,9 +83,8 @@ def setup(
     ]
     success = True
 
-    success = True
-    for tool, env in tools_to_check:
-        if not check_tool(tool, env=env):
+    for tool, env, args in tools_to_check:
+        if not check_tool(tool, env=env, args=args):
             success = False
 
     if success:
