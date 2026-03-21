@@ -173,6 +173,22 @@ def create_rdna_env(name: str = RDNA_ENV, recreate: bool = False):
 
     return tmp_dir  # important for next step
 
+def install_rdna_miner_db(env: str = RDNA_ENV):
+    """
+    Install rDNA-miner databases inside its environment.
+    Equivalent to: `rdna-miner db install all`
+    """
+    info("Installing rDNA-miner databases...")
+    try:
+        subprocess.run(
+            ["conda", "run", "-n", env, "rdna-miner", "db", "install", "all"],
+            check=True
+        )
+        info("rDNA-miner databases installed successfully.")
+    except subprocess.CalledProcessError as e:
+        warn(f"Failed to install rDNA-miner databases: {e}")
+
+
 #------------------------------
 def check_tool(tool_name: str, env: str = None, args: list[str] = None):
     """

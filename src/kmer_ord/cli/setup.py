@@ -17,7 +17,7 @@ def setup(
     """
     from kmer_ord.system.env_manager import (TOOLS_ENV, TIARA_ENV, RDNA_ENV,
                                              env_exists, create_tools_env, create_rdna_env,
-                                             create_tiara_env, install_rust_tool, install_rdna_miner,
+                                             create_tiara_env, install_rust_tool, install_rdna_miner, install_rdna_miner_db,
                                              check_tool)
 
     print("-" * 70)
@@ -60,6 +60,7 @@ def setup(
             info(f"{RDNA_ENV} exists. Recreating (--force enabled)...")
             repo_path = create_rdna_env(RDNA_ENV, recreate=True)
             install_rdna_miner(RDNA_ENV, repo_path)
+            install_rdna_miner_db(RDNA_ENV)
         else:
             info(f"{RDNA_ENV} already exists. Skipping.")
     else:
