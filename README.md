@@ -14,31 +14,47 @@ Documentation and tutorials for kmer-ord https://fdboever.github.io/kmer-ord-doc
 
 ## Install
 
-Clone this repository first
+### 1. Clone the repository 
 
 ```bash
 git clone <repo-url>
+cd kmer-ord
 ```
 
-Then create and activate a fresh conda environment:
+### 2. Create the conda environment
+
+Option A (recommended): use the provided `environment.yml`
 
 ```bash
-conda create -n kmerord python=3.11 -c conda-forge
-conda activate kmerord
+conda env create -f environment.yml
+conda activate kmerord-env
 ```
 
-Once inside the new conda, install some python dependencies
+Option B: manual set upor setup
 
 ```bash
+conda create -n kmerord-env python=3.11 -c conda-forge
+conda activate kmerord-env
+
 conda install -c conda-forge numpy pandas scikit-learn umap-learn pacmap numba llvmlite biopython typer libspatialite python-igraph hnswlib hdbscan scipy leidenalg matplotlib seaborn setuptools==65.5.0
 ```
 
-Then enter repository directory and install (editable mode):
+### 3. Install the package
+First ensure you are inside the kmer-ord directory, and activated the conda environment
+
+For users
 
 ```bash
-cd kmer-ord
+pip install .
+```
+
+For developers (editable install)
+
+```bash
 pip install -e .
 ```
+
+### 4. Set up external tools and databases
 
 Finally, use kmer-ord to set up internal environments for external tools and downloading rRNA databases (this can take a while, so consider grabbing yourself a coffee) 
 
@@ -46,7 +62,8 @@ Finally, use kmer-ord to set up internal environments for external tools and dow
 kmer-ord setup
 ```
 
-test install by 
+### 5. Verify installation 
+
 ```bash
 kmer-ord --help
 ```

@@ -1,0 +1,24 @@
+name: kmerord-env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy
+  - pandas
+  - scipy
+  - scikit-learn
+  - umap-learn
+  - pacmap
+  - numba
+  - llvmlite
+  - biopython
+  - typer
+  - python-igraph
+  - leidenalg
+  - hdbscan
+  - hnswlib
+  - libspatialite
+  - matplotlib
+  - seaborn
+  - setuptools=65.5.0
+  - pip

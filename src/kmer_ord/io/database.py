@@ -1,6 +1,7 @@
 from os import name
 from pathlib import Path
 import pandas as pd
+import sqlite3
 
 # ---------------------------------------------------------
 def initialize_spatialite_db(db_file: Path):
