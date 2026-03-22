@@ -39,6 +39,8 @@ conda activate kmerord-env
 conda install -c conda-forge numpy pandas scikit-learn umap-learn pacmap numba llvmlite biopython typer libspatialite python-igraph hnswlib hdbscan scipy leidenalg matplotlib seaborn setuptools==65.5.0
 ```
 
+Tip: You can replace `conda` with `mamba` for faster installs.
+
 ### 3. Install the package
 First ensure you are inside the kmer-ord directory, and activated the conda environment
 

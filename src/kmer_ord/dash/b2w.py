@@ -22,6 +22,19 @@ import argparse
 from math import ceil
 from matplotlib.path import Path
 
+def run_dash_app(db_path: str, output_dir: str, host="127.0.0.1", port=8050):
+    global GLOBAL_DB_PATH, output_dir_default
+    GLOBAL_DB_PATH = db_path
+    output_dir_default = output_dir
+
+    initialise_app_state()
+
+    print_banner(host=host, port=port)
+    app.layout = build_layout()
+
+    print_banner(host=host, port=port)
+
+    app.run(host=host, port=port, debug=False)
 
 def print_banner(host="127.0.0.1", port=8050):
     title = "BIN2WIN"
@@ -51,24 +64,16 @@ def print_banner(host="127.0.0.1", port=8050):
     sys.stdout.write(banner)
     sys.stdout.flush()
 
-##############################
-# ARGPARSE
-##############################
-parser = argparse.ArgumentParser(
-    description="INTERACTIVE KMER-BASED READ ORDINATION INTERFACE - ***BIN2WIN***"
-)
-parser.add_argument("-d", "--database", type=str, required=True,
-                    help="Path to the main features database file")
-parser.add_argument("-o", "--output_dir", type=str, default="bins",
-                    help="Path to output directory (default: ./bins)")
-args = parser.parse_args()
 
-# Print banner as soon as the script starts with proper args
-print_banner(host="127.0.0.1", port=8050)
+# ---- runtime globals (set at runtime) ----
+#GLOBAL_DB_PATH = None
+#output_dir_default = None
 
-db_path = args.database
-output_dir_default = args.output_dir
-
+#feature_info = None
+#sidebar = None
+#nr_reads = None
+#nr_ordinations = None
+#count_badges = None
 
 ##############################
 # UTILS
@@ -133,7 +138,7 @@ def get_available_coordinate_systems(db_path):
 
 def load_coordinates_from_db(db_path,
                              coordinate_systems,
-                             feature_col=None,
+                             feature_cols=None, 
                              filter_values=None):
 
     conn = get_connection(db_path)
@@ -141,13 +146,18 @@ def load_coordinates_from_db(db_path,
     try:
         select = ["c.sequence_id AS header"]
         cols = set()
-        if feature_col:
-            cols.add(feature_col)
+        if feature_cols:   
+            if isinstance(feature_cols, str):
+                feature_cols = [feature_cols]
+            cols.update(feature_cols)
+
         if filter_values:
             cols.update(filter_values.keys())
+
         for cs in coordinate_systems:
             select.append(f"ST_X(c.{cs}) AS x_{cs}")
             select.append(f"ST_Y(c.{cs}) AS y_{cs}")
+
         for c in cols:
             select.append(f"f.{c} AS {c}")
 
@@ -180,13 +190,85 @@ def load_coordinates_from_db(db_path,
 
         df = pd.read_sql_query(query, conn, params=params)
 
-        # reduce memory usage
         for cs in coordinate_systems:
             df[f"x_{cs}"] = df[f"x_{cs}"].astype("float32")
             df[f"y_{cs}"] = df[f"y_{cs}"].astype("float32")
     finally:
         conn.close()
     return df
+
+
+# Export-optimized version of load_coordinates_from_db. ST_X/ST_Y extraction and Python Path.contains_points() replaced with spatialite ST_Within() to test polygon containment directly in SQL that returns only rows that pass filter AND already inside the bin
+def efficient_spatialite_export(db_path,
+                                coordinate_systems,
+                                polygons,
+                                feature_col=None,
+                                filter_values=None):
+    
+    conn = get_connection(db_path)
+
+    try:
+        cols = set()
+        if feature_col:
+            cols.add(feature_col)
+        if filter_values:
+            cols.update(filter_values.keys())
+
+        select = ["c.sequence_id AS header"]
+        for c in sorted(cols):
+            select.append(f"f.{c} AS {c}")
+
+        query = f"""
+        SELECT {', '.join(select)}
+        FROM coordinates AS c
+        JOIN features AS f
+          ON c.sequence_id = f.sequence_id
+        """
+
+        conds = []
+        params = []
+
+        if filter_values:
+            for col, b in filter_values.items():
+                if b.get("min") is not None:
+                    conds.append(f"f.{col} >= ?")
+                    params.append(b["min"])
+
+                if b.get("max") is not None:
+                    conds.append(f"f.{col} <= ?")
+                    params.append(b["max"])
+
+                if b.get("cat"):
+                    placeholders = ",".join(["?"] * len(b["cat"]))
+                    conds.append(f"f.{col} IN ({placeholders})")
+                    params.extend(b["cat"])
+
+        # spatial filter using geometry column directly
+        cs = coordinate_systems[0]
+        pts = polygons[cs]
+        
+        # ensure polygon ring is closed
+        if pts[0] != pts[-1]:
+            pts = pts + [pts[0]]
+        
+        coord_text = ", ".join(f"{float(x)} {float(y)}" for x, y in pts)
+        poly_wkt = f"POLYGON(({coord_text}))"
+        
+        conds.append(
+            f"ST_Within(c.{cs}, ST_GeomFromText(?, ST_SRID(c.{cs})))"
+        )
+        params.append(poly_wkt)
+        
+        if conds:
+            query += " WHERE " + " AND ".join(conds)
+
+        df = pd.read_sql_query(query, conn, params=params)
+
+    finally:
+        conn.close()
+
+    return df
+
 
 def get_number_of_reads(db_path):
     conn = get_connection(db_path)
@@ -226,22 +308,24 @@ def create_datashader_image(df, x_col, y_col,
             img = tf.shade(agg, cmap=cmap_list, how='linear')
         
         else:
+            #  Datashader count_cat() requires a categorical column
             cat = df[color_col].astype("category")
-            df_ds['cat_code'] = cat.cat.codes.values
-            categories = cat.cat.categories
-            
+            df_ds['cat_value'] = pd.Categorical(cat)
+            categories = list(cat.cat.categories)
+        
+            # use categorical palette selector only
             if color_palette == "Category10":
-                palette = bokeh.palettes.Category10[10]
+                if len(categories) <= 10:
+                    palette = bokeh.palettes.Category10[10][:len(categories)]
+                else:
+                    palette = glasbey[:len(categories)]
             elif color_palette == "glasbey":
                 palette = glasbey[:len(categories)]
             else:
-                cmap = plt.get_cmap(color_palette) if color_palette in plt.colormaps() else plt.get_cmap("viridis")
-                palette = [matplotlib.colors.rgb2hex(cmap(i)) for i in range(256)]
-                if len(categories) > len(palette):
-                    palette = glasbey[:len(categories)]
-            
+                palette = glasbey[:len(categories)]
+        
             key = dict(zip(categories, palette))
-            agg = cvs.points(df_ds, x='x', y='y', agg=ds.count_cat('cat_code'))
+            agg = cvs.points(df_ds, x='x', y='y', agg=ds.count_cat('cat_value'))
             img = tf.shade(agg, color_key=key, how='eq_hist')
     
     else:
@@ -252,8 +336,257 @@ def create_datashader_image(df, x_col, y_col,
     
     img = tf.spread(img, px=max(int(px_spread), 1))
     return img.to_pil()
+    
+# Small per-panel legend for feature comparison mode.
+def create_panel_legend(df, feature_name, continuous_palette, categorical_palette):
+    """
+    Return:
+        (legend_component, legend_type)
+    where legend_type is "continuous" or "categorical".
+    Must always return exactly 2 values.
+    """
+
+    if not feature_name or feature_name not in df.columns:
+        return (
+            html.Div(
+                "Density map",
+                style={"color": "white", "fontSize": "0.75rem", "textAlign": "center"}
+            ),
+            "continuous"
+        )
+
+    # Continuous feature -> small horizontal colorbar
+    if pd.api.types.is_numeric_dtype(df[feature_name]):
+        if not df[feature_name].notna().any():
+            return (
+                html.Div(
+                    f"{feature_name}: no values",
+                    style={"color": "white", "fontSize": "0.75rem", "textAlign": "center"}
+                ),
+                "continuous"
+            )
+
+        vmin = float(df[feature_name].min())
+        vmax = float(df[feature_name].max())
+
+        if vmin == vmax:
+            return (
+                html.Div(
+                    f"{feature_name}: constant ({vmin})",
+                    style={"color": "white", "fontSize": "0.75rem", "textAlign": "center"}
+                ),
+                "continuous"
+            )
+
+        cmap_name = continuous_palette if continuous_palette in plt.colormaps() else "viridis"
+        cmap = cm.get_cmap(cmap_name)
+
+        colorscale = []
+        for i in range(256):
+            frac = i / 255.0
+            r, g, b, _ = cmap(frac)
+            colorscale.append([
+                frac,
+                f"rgb({int(r*255)}, {int(g*255)}, {int(b*255)})"
+            ])
+
+        legend_trace = go.Scatter(
+            x=[0, 1],
+            y=[0, 1],
+            mode='markers',
+            marker=dict(
+                size=0.0001,
+                color=[vmin, vmax],
+                colorscale=colorscale,
+                showscale=True,
+                colorbar=dict(
+                    title=dict(text=feature_name, font=dict(color='white', size=9)),
+                    tickfont=dict(color='white', size=8),
+                    orientation='h',
+                    x=0.5,
+                    xanchor='center',
+                    thickness=10,
+                    len=0.9,
+                ),
+            ),
+            hoverinfo='none',
+            showlegend=False
+        )
+
+        legend_fig = go.Figure(data=[legend_trace])
+        legend_fig.update_xaxes(visible=False)
+        legend_fig.update_yaxes(visible=False)
+        legend_fig.update_layout(
+            margin=dict(l=20, r=20, t=8, b=8),
+            height=95,
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)',
+            font=dict(color='white')
+        )
+
+        return (
+            dcc.Graph(
+                figure=legend_fig,
+                config={"displayModeBar": False},
+                style={"height": "95px", "width": "100%"}
+            ),
+            "continuous"
+        )
+
+    # Categorical feature -> compact HTML legend
+    cats = df[feature_name].astype("category").cat.categories.tolist()
+
+    if not cats:
+        return (
+            html.Div(
+                f"{feature_name}: no categories",
+                style={"color": "white", "fontSize": "0.75rem", "textAlign": "center"}
+            ),
+            "categorical"
+        )
+
+    if categorical_palette == "Category10" and len(cats) <= 10:
+        palette = bokeh.palettes.Category10[10][:len(cats)]
+    else:
+        palette = glasbey[:len(cats)]
+
+    items = []
+    for cat, color in zip(cats, palette):
+        items.append(
+            html.Div(
+                [
+                    html.Span(
+                        style={
+                            "display": "inline-block",
+                            "width": "10px",
+                            "height": "10px",
+                            "marginRight": "5px",
+                            "backgroundColor": color,
+                            "border": "1px solid #ccc",
+                            "verticalAlign": "middle"
+                        }
+                    ),
+                    html.Span(
+                        str(cat),
+                        style={"verticalAlign": "middle", "fontSize": "0.72rem"}
+                    )
+                ],
+                style={
+                    "display": "inline-block",
+                    "marginRight": "10px",
+                    "marginBottom": "3px"
+                }
+            )
+        )
+
+    return (
+        html.Div(
+            items,
+            style={
+                "color": "white",
+                "textAlign": "center",
+                "paddingTop": "0px",
+                "fontSize": "0.75rem"
+            }
+        ),
+        "categorical"
+    )
+
+# supporting clean plots button 
+def figure_to_serializable(fig):
+    return fig.to_dict()
 
 
+def build_plot_grid_from_serialized(serialized_plots):
+    row_comps = []
+
+    max_cols = max(len(row) for row in serialized_plots) if serialized_plots else 1
+
+    for row in serialized_plots:
+        cols = []
+        col_width = max(1, int(12 / max_cols))
+
+        for item in row:
+            cs = item["coordinate_system"]
+            panel_id = item["panel_id"]          
+            panel_title = item["panel_title"]    
+            fig_dict = item["figure"]
+
+            graph_container = html.Div(
+                dcc.Graph(
+                    id={                         # keep same full id shape so pattern-matching callbacks can see restored plots
+                        "type": "scatter-plot",
+                        "index": panel_id,
+                        "coordinate_system": cs
+                    },
+                    figure=fig_dict,
+                    config={"responsive": True},
+                    style={"height": "100%", "width": "100%"}
+                ),
+                style={
+                    "width": "100%",
+                    "height": "100%",
+                    "minHeight": 0,
+                    "overflow": "hidden",
+                    "border": "1px solid #444"
+                }
+            )
+
+            cols.append(
+                dbc.Col(
+                    [
+                        html.H5(
+                            # cs,
+                            panel_title,   #  panel title = feature name
+                            style={
+                                "color": "white",
+                                "textAlign": "center",
+                                "marginBottom": "6px",
+                                "flex": "0 0 auto",
+                            }
+                        ),
+                        html.Div(
+                            graph_container,
+                            style={
+                                "flex": "1 1 auto",
+                                "minHeight": 0,
+                                "display": "flex",
+                                "flexDirection": "column",
+                            }
+                        )
+                    ],
+                    width=col_width,
+                    style={
+                        "display": "flex",
+                        "flexDirection": "column",
+                        "minHeight": 0,
+                        "height": "100%",
+                    }
+                )
+            )
+
+        row_comps.append(
+            dbc.Row(
+                cols,
+                justify="center",
+                #className="mb-2",
+                style={
+                    "flex": "1 1 0",
+                    "minHeight": 0,
+                }
+            )
+        )
+
+    return html.Div(
+        row_comps,
+        style={
+            "height": "100%",
+            "display": "flex",
+            "flexDirection": "column",
+            "gap": "4px",
+            "minHeight": 0,
+        }
+    )
 
 ##############################
 # BUILD SIDEBAR + LAYOUT
@@ -262,7 +595,7 @@ def create_datashader_image(df, x_col, y_col,
 # BUILD SIDEBAR
 ##############################
 def build_dynamic_sidebar(feature_info):
-    coord_opts = get_available_coordinate_systems(db_path)
+    coord_opts = get_available_coordinate_systems(GLOBAL_DB_PATH)
 
     section_title_style = {
         "fontSize": "0.7rem",
@@ -294,6 +627,20 @@ def build_dynamic_sidebar(feature_info):
     children += [
         html.Div("Plot Controls", style=section_title_style),
 
+        #  mode toggle
+        dbc.Label("Plot Mode", className="small"),
+        dcc.RadioItems(
+            id="plot-mode-toggle",
+            options=[
+                {"label": "DR comparison", "value": "dr-comparison"},
+                {"label": "Feature comparison", "value": "feature-comparison"},
+            ],
+            value="dr-comparison",
+            labelStyle={"display": "block", "marginBottom": "4px"},
+            inputStyle={"marginRight": "6px"},
+            style={"fontSize": "0.8rem", "marginBottom": "0.75rem"},
+        ),
+
         dbc.Label("Coordinate Systems", className="small"),
         dcc.Dropdown(
             id="coordinate-systems-checklist",
@@ -303,28 +650,56 @@ def build_dynamic_sidebar(feature_info):
             placeholder="Select DR methods",
         ),
 
-        dbc.Label("Color By", className="small mt-3"),
-        dcc.Dropdown(
-            id="color-feature-dropdown",
-            options=[
-                {"label": f['column_name'], "value": f['column_name']}
-                for f in feature_info
-            ],
-            placeholder="Select feature",
-            searchable=False,
-        ),
+        html.Div([   # wrap so we can hide/show by mode
+            dbc.Label("Color By", className="small mt-3"),
+            dcc.Dropdown(
+                id="color-feature-dropdown",
+                options=[
+                    {"label": f['column_name'], "value": f['column_name']}
+                    for f in feature_info
+                ],
+                placeholder="Select feature",
+                searchable=False,
+            ),
+        ], id="dr-color-feature-wrapper"),
 
-        dbc.Label("Color Palette", className="small mt-3"),
+        # feature comparison selector
+        html.Div([
+            dbc.Label("Features to Compare", className="small mt-3"),
+            dcc.Dropdown(
+                id="feature-comparison-dropdown",
+                options=[
+                    {"label": f['column_name'], "value": f['column_name']}
+                    for f in feature_info
+                ],
+                multi=True,
+                placeholder="Select features",
+                searchable=False,
+            ),
+        ], id="feature-comparison-wrapper", style={"display": "none"}),
+
+
+        # separate palette selectors for numeric vs categorical features
+        dbc.Label("Continuous Palette", className="small mt-3"),
         dcc.Dropdown(
-            id="color-palette-dropdown",
+            id="continuous-palette-dropdown",
             options=[
                 {"label": "viridis", "value": "viridis"},
                 {"label": "plasma", "value": "plasma"},
                 {"label": "inferno", "value": "inferno"},
+            ],
+            value="viridis",
+            searchable=False,
+        ),
+        
+        dbc.Label("Categorical Palette", className="small mt-3"),
+        dcc.Dropdown(
+            id="categorical-palette-dropdown",
+            options=[
                 {"label": "Category10", "value": "Category10"},
                 {"label": "glasbey", "value": "glasbey"},
             ],
-            value="viridis",
+            value="glasbey",
             searchable=False,
         ),
 
@@ -356,20 +731,8 @@ def build_dynamic_sidebar(feature_info):
             className="w-100 mb-2",
             style=button_style,
         ),
-
-        dbc.Button(
-            "Delete DF",
-            id="delete-df-button",
-            className="w-100",
-            style={
-                **button_style,
-                "border": "1px solid #442",
-                "color": "#f08080",
-            },
-        ),
     ]
 
-    # FILTERS
     filter_children = []
 
     for feat in feature_info:
@@ -449,21 +812,19 @@ external_stylesheets = [
 
 app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
 
-##from dash_bootstrap_templates import load_figure_template
-##load_figure_template("slate")
-# Choose theme
-# app = dash.Dash(__name__, external_stylesheets=[dbc.themes.FLATLY])
-# app = dash.Dash(__name__, external_stylesheets=[dbc.themes.SUPERHERO])
-# app = dash.Dash(__name__, external_stylesheets=[dbc.themes.COSMO])
-#app = dash.Dash(__name__, external_stylesheets=[dbc.themes.DARKLY])
+def initialise_app_state():
+    global feature_info, sidebar, nr_reads, nr_ordinations, count_badges
 
-feature_info = parse_feature_types(db_path)
-sidebar = build_dynamic_sidebar(feature_info)
-nr_reads = get_number_of_reads(db_path)
-nr_ordinations = get_number_of_ordinations(db_path)
+    feature_info = parse_feature_types(GLOBAL_DB_PATH)
+    sidebar = build_dynamic_sidebar(feature_info)
+    nr_reads = get_number_of_reads(GLOBAL_DB_PATH)
+    nr_ordinations = get_number_of_ordinations(GLOBAL_DB_PATH)
+    count_badges = make_count_badges(GLOBAL_DB_PATH)
+
 
 store_bins = dcc.Store(id='bins-store', data=[])
 store_overlay = dcc.Store(id='overlay-store', data=[])
+store_base_plots = dcc.Store(id='base-plots-store', data=None)   
 
 ##############################
 # LAYOUT
@@ -516,214 +877,242 @@ def make_count_badges(db_path):
         }
     )
 
-count_badges = make_count_badges(db_path)
 
-
-# Adjust sidebar to sit BELOW banner
-#sidebar.style.update({
-#    "top": BANNER_HEIGHT,
-#    "height": f"calc(100vh - {BANNER_HEIGHT})",
-#})
 
 ##############################
 # APP LAYOUT
 ##############################
+def build_layout():
+    BANNER_HEIGHT = "90px"
+    SIDEBAR_WIDTH = "18rem"
 
-BANNER_HEIGHT = "90px"
-SIDEBAR_WIDTH = "18rem"
-
-# -----------------------
-# Banner (fixed top)
-# -----------------------
-banner = html.Div(
-    [
-        dbc.Container(
-            [
-                dbc.Row(
-                    [
-                        dbc.Col(
-                            html.Div([
-                                html.H2(
-                                    "b2w",
-                                    style={"margin": 0, "fontWeight": "600", "letterSpacing": "1px"},
-                                ),
+    # -----------------------
+    # Banner (fixed top)
+    # -----------------------
+    banner = html.Div(
+        [
+            dbc.Container(
+                [
+                    dbc.Row(
+                        [
+                            dbc.Col(
+                                html.Div([
+                                    html.H2(
+                                        "b2w",
+                                        style={"margin": 0, "fontWeight": "600", "letterSpacing": "1px"},
+                                    ),
+                                    html.Div(
+                                        "Interactive binning",
+                                        style={"fontSize": "0.85rem", "opacity": 0.7},
+                                    ),
+                                ])
+                            ),
+                            dbc.Col(
                                 html.Div(
-                                    "Interactive binning",
-                                    style={"fontSize": "0.85rem", "opacity": 0.7},
+                                    [
+                                        html.Div(
+                                            "kmer-ord",
+                                            style={
+                                                "textAlign": "right",
+                                                "fontSize": "0.8rem",
+                                                "opacity": 0.6,
+                                            },
+                                        ),
+                                        html.Div(
+                                            [
+                                                dbc.Badge(
+                                                    [html.I(className="bi bi-github me-1"),
+                                                    "FDBoever/kmer-ord"],
+                                                    href="https://github.com/FDBoever/kmer-ord",
+                                                    target="_blank",
+                                                    #color="secondary",
+                                                    #className="me-2",
+                                                    style={"fontSize": "0.7rem",
+                                                        "background": "rgb(69, 95, 177)",
+                                                        "color": "#fff",
+                                                        "padding": "6px 7px",
+                                                        "borderRadius": "4px"},
+                                                ),
+                                            ],
+                                            style={"textAlign": "right", "marginTop": "6px"},
+                                        ),
+                                    ]
                                 ),
-                            ])
-                        ),
-                        dbc.Col(
+                                width="auto",
+                            ),
+                        ],
+                        align="center",
+                        style={"height": BANNER_HEIGHT},
+                    )
+                ],
+                fluid=True
+            )
+        ],
+        style={
+            "position": "fixed",
+            "top": 0,
+            "left": 0,
+            "right": 0,
+            "height": BANNER_HEIGHT,
+            "background": "linear-gradient(90deg, #111111, #1c1c1c)",
+            "zIndex": 1000,
+            "borderBottom": "1px solid #2a2a2a",
+        },
+    )
+
+    sidebar_style = {
+        "flex": f"0 0 {SIDEBAR_WIDTH}",
+        "maxWidth": SIDEBAR_WIDTH,
+        "overflowY": "auto",
+        "backgroundColor": "#1c1c1c"
+    }
+
+    main_content_style = {
+        "flex": "1 1 auto",
+        "overflow": "hidden",
+        "display": "flex",
+        "paddingRight": "2rem",
+        "flexDirection": "column",
+    }
+
+    main_content = html.Div(
+        [
+            count_badges,
+            dbc.Card(
+                [
+                    dbc.CardHeader("Visualise and create Bins"),
+                    dbc.CardBody(
+                        [   
+                            # --- Resizable plots container: plots shrink/grow to fit box height ---
                             html.Div(
                                 [
                                     html.Div(
-                                        "kmer-ord",
-                                        style={
-                                            "textAlign": "right",
-                                            "fontSize": "0.8rem",
-                                            "opacity": 0.6,
-                                        },
-                                    ),
-                                    html.Div(
                                         [
-                                            dbc.Badge(
-                                                [html.I(className="bi bi-github me-1"),
-                                                 "FDBoever/kmer-ord"],
-                                                href="https://github.com/FDBoever/kmer-ord",
-                                                target="_blank",
-                                                #color="secondary",
-                                                #className="me-2",
-                                                style={"fontSize": "0.7rem",
-                                                       "background": "rgb(69, 95, 177)",
-                                                       "color": "#fff",
-                                                       "padding": "6px 7px",
-                                                       "borderRadius": "4px"},
+                                            html.Div(
+                                                id='coordinates-plots-container',
+                                                style={
+                                                    "flex": "1 1 auto",
+                                                    "minHeight": 0,
+                                                    "display": "flex",
+                                                    "flexDirection": "column",
+                                                }
+                                            ),
+                                            html.Div(
+                                                id='color-legend-container',
+                                                style={
+                                                    "textAlign": "center",
+                                                    "marginTop": "10px",
+                                                    "marginBottom": "20px",
+                                                    "flex": "0 0 auto",
+                                                }
                                             ),
                                         ],
-                                        style={"textAlign": "right", "marginTop": "6px"},
-                                    ),
-                                ]
+                                        style={
+                                            "height": "100%",
+                                            "display": "flex",
+                                            "flexDirection": "column",
+                                            "minHeight": 0,
+                                        }
+                                    )
+                                ],
+                                style={
+                                    "height": "70vh",
+                                    "minHeight": "450px",
+                                    "resize": "vertical",
+                                    "overflow": "hidden",
+                                    "border": "1px solid #333",
+                                    "padding": "8px",
+                                    "flex": "0 0 auto",
+                                }
                             ),
-                            width="auto",
-                        ),
-                    ],
-                    align="center",
-                    style={"height": BANNER_HEIGHT},
-                )
-            ],
-            fluid=True
-        )
-    ],
-    style={
-        "position": "fixed",
-        "top": 0,
-        "left": 0,
-        "right": 0,
-        "height": BANNER_HEIGHT,
-        "background": "linear-gradient(90deg, #111111, #1c1c1c)",
-        "zIndex": 1000,
-        "borderBottom": "1px solid #2a2a2a",
-    },
-)
-
-sidebar_style = {
-    "flex": f"0 0 {SIDEBAR_WIDTH}",
-    "maxWidth": SIDEBAR_WIDTH,
-    "overflowY": "auto",
-    "backgroundColor": "#1c1c1c"
-}
-
-main_content_style = {
-    "flex": "1 1 auto",
-    "overflow": "hidden",
-    "display": "flex",
-    "paddingRight": "2rem",
-    "flexDirection": "column",
-}
-
-sidebar = build_dynamic_sidebar(feature_info)
-
-
-main_content = html.Div(
-    [
-        count_badges,
-        dbc.Card(
-            [
-                dbc.CardHeader("Visualise and create Bins"),
-                dbc.CardBody(
-                    [
-                        # --- Scrollable plots container ---
-                        html.Div(
-                            [
-                                html.Div(id='coordinates-plots-container'),
-                                html.Div(
-                                    id='color-legend-container',
-                                    style={"textAlign": "center", "marginTop": "10px","marginBottom": "20px"}
-                                ),
-                            ],
-                            style={
-                                "flex": "1 1 auto",
-                                "overflowY": "auto",
-                                "maxHeight": "calc(100vh - " + BANNER_HEIGHT + " - 250px)",  
-                                # 250px leaves room for controls/footer
-                            }
-                        ),
-                        dbc.Row(
-                            [
-                                dbc.Col(
-                                    dbc.InputGroup(
-                                        [
-                                            dbc.InputGroupText("Bin Name"),
-                                            dbc.Input(id='bin-name-input', type='text', placeholder='Enter bin name',
-                                                      style={"background": "#383B3E", "color": "#ffffff"}),
-                                        ],
-                                        className="mb-3", size="sm",
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        dbc.InputGroup(
+                                            [
+                                                dbc.InputGroupText("Bin Name"),
+                                                dbc.Input(
+                                                    id='bin-name-input',
+                                                    type='text',
+                                                    placeholder='Enter bin name',
+                                                    style={"background": "#383B3E", "color": "#ffffff"}
+                                                ),
+                                            ],
+                                            className="mb-3",
+                                            size="sm",
+                                        ),
+                                        width=4
                                     ),
-                                    width=4
-                                ),
-                                dbc.Col(dbc.Button("Create Bin", id='create-bin-button',style={"backgroundColor": "#222","border": "1px solid #333","color": "#ddd","fontSize": "0.75rem","padding": "6px 10px",}), width=2),
-                                dbc.Col(dbc.Button("Inspect Bin", id='inspect-bin-button',style={"backgroundColor": "#222","border": "1px solid #333","color": "#ddd","fontSize": "0.75rem","padding": "6px 10px",}), width=2),
-                                dbc.Col(dbc.Button("Overlay Points", id='overlay-points-button',style={"backgroundColor": "#222","border": "1px solid #333","color": "#ddd","fontSize": "0.75rem","padding": "6px 10px",}), width=2),
-                            ],
-                            className="mb-3"
-                        ),
-                        html.H4("Bins List"),
-                        html.Div(id='bin-list-container', className="mb-3"),
-                        html.Div(id='error-message', className="mb-3"),
-                        html.Div(id='bin-table-container', className="mt-3")
-                    ]
-                )
-            ],
-            className="m-3 w-100"
-        )
-    ],
-    style=main_content_style
-)
+                                    dbc.Col(dbc.Button("Create Bin", id='create-bin-button',
+                                                    style={"backgroundColor": "#222","border": "1px solid #333","color": "#ddd","fontSize": "0.75rem","padding": "6px 10px"}), width=2),
+                                    dbc.Col(dbc.Button("Inspect Bin", id='inspect-bin-button',
+                                                    style={"backgroundColor": "#222","border": "1px solid #333","color": "#ddd","fontSize": "0.75rem","padding": "6px 10px"}), width=2),
+                                    dbc.Col(dbc.Button("Overlay Points", id='overlay-points-button',
+                                                    style={"backgroundColor": "#222","border": "1px solid #333","color": "#ddd","fontSize": "0.75rem","padding": "6px 10px"}), width=2),
+                                    dbc.Col(dbc.Button("Clear Plots", id='clear-plots-button',
+                                                    style={"backgroundColor": "#222","border": "1px solid #333","color": "#ddd","fontSize": "0.75rem","padding": "6px 10px"}), width=2),   
+                                ],
+                                className="mb-3"
+                            ),
+                            html.H4("Bins List"),
+                            html.Div(id='bin-list-container', className="mb-3"),
+                            html.Div(id='error-message', className="mb-3"),
+                            html.Div(id='bin-table-container', className="mt-3")
+                        ]
+                    )
+                ],
+                className="m-3 w-100"
+            )
+        ],
+        style=main_content_style
+    )
 
 
-footer = html.Div(
-    dbc.Container(
-        dbc.Row(
-            [
-                dbc.Col("2026 Green team / SAMS", width=6,
-                        style={"fontSize": "0.8rem", "opacity": 0.6}),
-                dbc.Col("Version 1.0", width=6,
-                        style={"textAlign": "right", "fontSize": "0.8rem", "opacity": 0.6}),
-            ]
+    footer = html.Div(
+        dbc.Container(
+            dbc.Row(
+                [
+                    dbc.Col("2026 Green team / SAMS", width=6,
+                            style={"fontSize": "0.8rem", "opacity": 0.6}),
+                    dbc.Col("Version 1.0", width=6,
+                            style={"textAlign": "right", "fontSize": "0.8rem", "opacity": 0.6}),
+                ]
+            ),
+            fluid=True
         ),
-        fluid=True
-    ),
-    style={
-        "padding": "10px 10px",
-        "borderTop": "1px solid #2a2a2a",
-        "backgroundColor": "#111111",
-        "width": "100%",
-    }
-)
+        style={
+            "padding": "10px 10px",
+            "borderTop": "1px solid #2a2a2a",
+            "backgroundColor": "#111111",
+            "width": "100%",
+        }
+    )
 
-# -----------------------
-app.layout = html.Div(
-    [
-        banner,
+    # -----------------------
+    layout = html.Div(
+        [
+            banner,
 
-        html.Div(
-            [
-                # Sidebar + main content row
-                html.Div([html.Div(sidebar, style=sidebar_style),
-                          html.Div(main_content, style=main_content_style)],
-                    style={"display": "flex",
-                           "marginTop": BANNER_HEIGHT,
-                           "minHeight": "calc(100vh - " + BANNER_HEIGHT + ")"}
-                ),
-                footer,
-            ],
-            className="dbc",
-            style={"display": "flex", "flexDirection": "column"}
-        ),
-        store_bins,
-        store_overlay,
-    ]
-)
+            html.Div(
+                [
+                    # Sidebar + main content row
+                    html.Div([html.Div(sidebar, style=sidebar_style),
+                            html.Div(main_content, style=main_content_style)],
+                        style={"display": "flex",
+                            "marginTop": BANNER_HEIGHT,
+                            "minHeight": "calc(100vh - " + BANNER_HEIGHT + ")"}
+                    ),
+                    footer,
+                ],
+                className="dbc",
+                style={"display": "flex", "flexDirection": "column"}
+            ),
+            store_bins,
+            store_overlay,
+            store_base_plots, #NEW
+        ]
+    )
+    return layout
 
 
 
@@ -750,86 +1139,143 @@ def populate_categorical_options(matching_id):
 # MAIN PLOT CALLBACK (RESPONSIVE SIZING)
 ##############################
 @app.callback(
-    Output('coordinates-plots-container','children'),
-    Output('color-legend-container','children'),
-    Input('update-plots-button','n_clicks'),
-    Input('overlay-store','data'),
-    State('coordinate-systems-checklist','value'),
-    State('color-feature-dropdown','value'),
-    State('color-palette-dropdown','value'),
-    State({'type':'continuous-filter-min','column_name':ALL}, 'value'),
-    State({'type':'continuous-filter-min','column_name':ALL}, 'id'),
-    State({'type':'continuous-filter-max','column_name':ALL}, 'value'),
-    State({'type':'continuous-filter-max','column_name':ALL}, 'id'),
-    State({'type':'cat-checklist','column_name':ALL}, 'value'),
-    State({'type':'cat-checklist','column_name':ALL}, 'id'),
+    Output('coordinates-plots-container', 'children'),
+    Output('color-legend-container', 'children'),
+    Output('base-plots-store', 'data'),
+    Input('update-plots-button', 'n_clicks'),
+    Input('overlay-store', 'data'),
+    State('plot-mode-toggle', 'value'),
+    State('coordinate-systems-checklist', 'value'),
+    State('color-feature-dropdown', 'value'),
+    State('feature-comparison-dropdown', 'value'),
+    State('continuous-palette-dropdown', 'value'),
+    State('categorical-palette-dropdown', 'value'),
+    State({'type': 'continuous-filter-min', 'column_name': ALL}, 'value'),
+    State({'type': 'continuous-filter-min', 'column_name': ALL}, 'id'),
+    State({'type': 'continuous-filter-max', 'column_name': ALL}, 'value'),
+    State({'type': 'continuous-filter-max', 'column_name': ALL}, 'id'),
+    State({'type': 'cat-checklist', 'column_name': ALL}, 'value'),
+    State({'type': 'cat-checklist', 'column_name': ALL}, 'id'),
     State('px-spread-input', 'value'),
     prevent_initial_call=True
 )
 def update_multiple_coord_plots(
     _btn, overlay_headers,
-    selected_coords, selected_feature, selected_palette,
+    plot_mode,
+    selected_coords, selected_feature, selected_features,
+    continuous_palette, categorical_palette,
     all_min_vals, all_min_ids,
     all_max_vals, all_max_ids,
     all_cat_vals, all_cat_ids,
     px_spread
 ):
     if not selected_coords:
-        return [], ""
+        return [], "", None
 
-    # build filter_values
+    triggered = ctx.triggered_id
+    cache_base = (triggered == 'update-plots-button')
+
+    # single-select DR in feature mode arrives as string
+    if isinstance(selected_coords, str):
+        selected_coords = [selected_coords]
+
+    # guard against accidental string splitting
+    if isinstance(selected_features, str):
+        selected_features = [selected_features]
+
     fv = {}
     for v, i in zip(all_min_vals, all_min_ids):
-        fv.setdefault(i["column_name"],{"min":None,"max":None,"cat":[]} )["min"] = v
+        fv.setdefault(i["column_name"], {"min": None, "max": None, "cat": []})["min"] = v
     for v, i in zip(all_max_vals, all_max_ids):
-        fv.setdefault(i["column_name"],{"min":None,"max":None,"cat":[]} )["max"] = v
+        fv.setdefault(i["column_name"], {"min": None, "max": None, "cat": []})["max"] = v
     for vals, i in zip(all_cat_vals, all_cat_ids):
-        fv.setdefault(i["column_name"],{"min":None,"max":None,"cat":[]} )["cat"] = vals
+        fv.setdefault(i["column_name"], {"min": None, "max": None, "cat": []})["cat"] = vals
+
+    # unified panel specs
+    panel_specs = []
+
+    if plot_mode == "feature-comparison":
+        if not selected_coords or len(selected_coords) != 1 or not selected_features:
+            return [], "Select exactly one coordinate system and one or more features.", None
+
+        cs = selected_coords[0]
+        for feat in selected_features:
+            panel_specs.append({
+                "panel_id": f"{cs}__{feat}",
+                "coordinate_system": cs,
+                "feature": feat,
+                "title": feat,
+            })
+
+        feature_cols_to_load = list(selected_features)
+        coord_systems_to_load = [cs]
+
+    else:
+        if not selected_coords:
+            return [], "", None
+
+        for cs in selected_coords:
+            panel_specs.append({
+                "panel_id": cs,
+                "coordinate_system": cs,
+                "feature": selected_feature,
+                "title": cs,
+            })
+
+        feature_cols_to_load = [selected_feature] if selected_feature else None
+        coord_systems_to_load = list(selected_coords)
 
     df = load_coordinates_from_db(
-        db_path=db_path,
-        coordinate_systems=selected_coords,
-        feature_col=selected_feature,
+        db_path=GLOBAL_DB_PATH,
+        coordinate_systems=coord_systems_to_load,
+        feature_cols=feature_cols_to_load,
         filter_values=fv
     )
 
-    # Dynamically decide layout based on number of plots
-    n_plots = len(selected_coords)
+    n_plots = len(panel_specs)
+
     if n_plots == 1:
         plots_per_row = 1
-        graph_height = 800
-        graph_width = 800
     elif n_plots == 2:
         plots_per_row = 2
-        graph_height = 600
-        graph_width = 600
-    elif n_plots == 3:
-        plots_per_row = 3
-        graph_height = 500
-        graph_width = 500
     else:
         plots_per_row = 3
-        graph_height = 400
-        graph_width = 400
 
     rows = ceil(n_plots / plots_per_row)
     row_comps = []
+    serialized_rows = []
+
+    PANEL_LEGEND_SLOT_HEIGHT = "40px"   #  fixed equal legend area for all feature-comparison panels
+    PANEL_LEGEND_TOP_PAD = "10px"        #  same distance from plot to legend for all legend types
 
     for r in range(rows):
-        slice_cs = selected_coords[r*plots_per_row:(r+1)*plots_per_row]
+        slice_panels = panel_specs[r * plots_per_row:(r + 1) * plots_per_row]
         cols = []
-        row_count = len(slice_cs)
-        col_width = max(1, int(12 / row_count))  # Bootstrap col widths
+        serialized_row = []
+        col_width = max(1, int(12 / plots_per_row))
 
-        for cs in slice_cs:
+        for panel in slice_panels:
+            cs = panel["coordinate_system"]
+            panel_feature = panel["feature"]
+            panel_title = panel["title"]
+            panel_id = panel["panel_id"]
+
             xcol, ycol = f"x_{cs}", f"y_{cs}"
 
             fig = go.Figure()
             fig.update_layout(template="plotly_dark")
 
-            # always add the original raster below
+            # choose numeric vs categorical palette automatically
+            if panel_feature is not None and panel_feature in df.columns:
+                if pd.api.types.is_numeric_dtype(df[panel_feature]):
+                    panel_palette = continuous_palette
+                else:
+                    panel_palette = categorical_palette
+            else:
+                panel_palette = continuous_palette
+
             base_img = create_datashader_image(
-                df, xcol, ycol, selected_feature, selected_palette,
+                df, xcol, ycol, panel_feature, panel_palette,
                 px_spread=px_spread
             )
             fig.add_layout_image({
@@ -843,7 +1289,6 @@ def update_multiple_coord_plots(
                 "layer": "below"
             })
 
-            # if overlaying, add red/green map above at 50% opacity
             if overlay_headers:
                 df['overlay_flag'] = df['header'].isin(overlay_headers).astype('category')
                 cvs = ds.Canvas(plot_width=500, plot_height=500)
@@ -851,10 +1296,7 @@ def update_multiple_coord_plots(
                 color_key = {False: 'red', True: 'green'}
                 overlay_img = tf.shade(agg, color_key=color_key, how='eq_hist')
 
-                if px_spread is None or px_spread <= 0:
-                    px_spread_use = 1
-                else:
-                    px_spread_use = int(px_spread)
+                px_spread_use = 1 if px_spread is None or px_spread <= 0 else int(px_spread)
 
                 overlay_img = tf.spread(overlay_img, px=px_spread_use)
                 overlay_img = overlay_img.to_pil().convert("RGBA")
@@ -870,190 +1312,294 @@ def update_multiple_coord_plots(
                 })
 
             fig.update_layout(
-                #title=f"{cs} Plot",
                 dragmode='lasso',
-                #height=graph_height,
-                #width=graph_width,
                 yaxis_scaleanchor="x",
-                xaxis=dict(visible=False,
-                           range=[df[xcol].min(), df[xcol].max()],
-                           autorange=False,
-                           constrain='domain'),
-                yaxis=dict(visible=False,
-                           range=[df[ycol].min(), df[ycol].max()],
-                           autorange=False,
-                           constrain='domain'),
-                #margin=dict(l=0, r=0, t=30, b=0)
+                xaxis=dict(
+                    visible=False,
+                    range=[df[xcol].min(), df[xcol].max()],
+                    autorange=False,
+                    constrain='domain'
+                ),
+                yaxis=dict(
+                    visible=False,
+                    range=[df[ycol].min(), df[ycol].max()],
+                    autorange=False,
+                    constrain='domain'
+                ),
                 margin=dict(l=10, r=10, t=10, b=10)
-
             )
 
-            # Wrap graph in a resizable container
             graph_container = html.Div(
                 dcc.Graph(
-                    id={"type":"scatter-plot","index":cs},
+                    id={
+                        "type": "scatter-plot",
+                        "index": panel_id,
+                        "coordinate_system": cs
+                    },
                     figure=fig,
-                    #config={"responsive": False},
                     config={"responsive": True},
-                    #style={"height": f"{graph_height}px", "width": f"{graph_width}px"}
                     style={"height": "100%", "width": "100%"}
                 ),
                 style={
-                    #"height": f"{graph_height}px",
-                    #"width": f"{graph_width}px",
                     "width": "100%",
-                    "aspectRatio": "1 / 1",
-                    "resize": "both",
-                    #"overflow": "auto",
+                    "height": "100%",
+                    "minHeight": 0,
                     "overflow": "hidden",
                     "border": "1px solid #444"
                 }
             )
 
+            if plot_mode == "feature-comparison":
+                # assumes create_panel_legend always returns (component, type)
+                panel_legend, panel_legend_type = create_panel_legend(
+                    df=df,
+                    feature_name=panel_feature,
+                    continuous_palette=continuous_palette,
+                    categorical_palette=categorical_palette
+                )
+            else:
+                panel_legend, panel_legend_type = None, None
+
+            if cache_base:
+                serialized_row.append({
+                    "coordinate_system": cs,
+                    "panel_id": panel_id,
+                    "panel_title": panel_title,
+                    "figure": figure_to_serializable(fig)
+                })
+
             cols.append(
-                dbc.Col([
-                    html.H5(cs, style={"color":"white","textAlign":"center"}),
-                    graph_container
-                ], width=col_width)
+                dbc.Col(
+                    [
+                        html.H5(
+                            panel_title,
+                            style={
+                                "color": "white",
+                                "textAlign": "center",
+                                "marginBottom": "6px",
+                                "flex": "0 0 auto",
+                            }
+                        ),
+                        html.Div(
+                            graph_container,
+                            style={
+                                "flex": "1 1 auto",
+                                "minHeight": 0,
+                                "display": "flex",
+                                "flexDirection": "column",
+                            }
+                        ),
+
+                        # fixed legend slot + same padding/margins for continuous and categorical
+                        html.Div(
+                            panel_legend,
+                            style={
+                                "flex": "0 0 auto",
+                                "height": PANEL_LEGEND_SLOT_HEIGHT,
+                                "minHeight": PANEL_LEGEND_SLOT_HEIGHT,
+                                "maxHeight": PANEL_LEGEND_SLOT_HEIGHT,
+                                "marginTop": "0px",
+                                "paddingTop": PANEL_LEGEND_TOP_PAD,
+                                "display": "flex",
+                                "justifyContent": "center",
+                                "alignItems": "flex-start",
+                                "overflow": "hidden",
+                            }
+                        ) if panel_legend is not None else html.Div()
+                    ],
+                    width=col_width,
+                    style={
+                        "display": "flex",
+                        "flexDirection": "column",
+                        "minHeight": 0,
+                    }
+                )
             )
 
-        row_comps.append(dbc.Row(cols, justify="center", className="mb-3"))
+        if cache_base:
+            serialized_rows.append(serialized_row)
 
-    # ---------- build shared legend below grid ----------
-    legend_component = ""
-
-    if selected_feature and (selected_feature in df.columns):
-        # Continuous feature -> colorbar
-        if pd.api.types.is_numeric_dtype(df[selected_feature]):
-            if df[selected_feature].notna().any():
-                vmin = float(df[selected_feature].min())
-                vmax = float(df[selected_feature].max())
-
-                if vmin != vmax:
-                    cmap_name = selected_palette if selected_palette in plt.colormaps() else "viridis"
-                    cmap = cm.get_cmap(cmap_name)
-
-                    colorscale = []
-                    for i in range(256):
-                        frac = i / 255.0
-                        r, g, b, _ = cmap(frac)
-                        colorscale.append([
-                            frac,
-                            f"rgb({int(r*255)}, {int(g*255)}, {int(b*255)})"
-                        ])
-
-                    legend_trace = go.Scatter(
-                        x=[0, 1],
-                        y=[0, 1],
-                        mode='markers',
-                        marker=dict(
-                            size=0.0001,  # effectively invisible
-                            color=[vmin, vmax],
-                            colorscale=colorscale,
-                            showscale=True,
-                            colorbar=dict(
-                                title=dict(text=selected_feature, font=dict(color='white')),
-                                tickfont=dict(color='white'),
-                                orientation='h',
-                                x=0.5,
-                                xanchor='center',
-                                thickness=15,
-                                len=0.8,
-                            ),
-                        ),
-                        hoverinfo='none',
-                        showlegend=False
-                    )
-                    
-                    legend_fig = go.Figure(data=[legend_trace])
-                    legend_fig.update_xaxes(visible=False)
-                    legend_fig.update_yaxes(visible=False)
-                    legend_fig.update_layout(
-                        margin=dict(l=40, r=40, t=10, b=20),
-                        height=120,
-                        paper_bgcolor='rgba(0,0,0,0)',
-                        plot_bgcolor='rgba(0,0,0,0)',
-                        font=dict(color='white')
-                    )
-                    
-                    legend_component = dcc.Graph(
-                        figure=legend_fig,
-                        style={"height": "120px"}
-                    )
-                else:
-                    legend_component = html.Div(
-                        f"Legend: {selected_feature} has a constant value ({vmin}).",
-                        style={"color": "white"}
-                    )
-
-        # Categorical feature -> HTML legend
-        else:
-            cats = df[selected_feature].astype("category").cat.categories.tolist()
-            if cats:
-                # Reproduce palette logic from create_datashader_image
-                if selected_palette == "Category10":
-                    palette = bokeh.palettes.Category10[10]
-                elif selected_palette == "glasbey":
-                    palette = glasbey[:len(cats)]
-                else:
-                    base_cmap_name = selected_palette if selected_palette in plt.colormaps() else "viridis"
-                    base_cmap = cm.get_cmap(base_cmap_name)
-                    palette = []
-                    n = max(len(cats) - 1, 1)
-                    for i in range(len(cats)):
-                        frac = i / n if n > 0 else 0.0
-                        r, g, b, _ = base_cmap(frac)
-                        palette.append(matplotlib.colors.rgb2hex((r, g, b)))
-
-                if len(cats) > len(palette):
-                    palette = glasbey[:len(cats)]
-
-                items = []
-                for cat, color in zip(cats, palette):
-                    items.append(
-                        html.Div(
-                            [
-                                html.Span(
-                                    style={
-                                        "display": "inline-block",
-                                        "width": "12px",
-                                        "height": "12px",
-                                        "marginRight": "6px",
-                                        "backgroundColor": color,
-                                        "border": "1px solid #ccc",
-                                        "verticalAlign": "middle"
-                                    }
-                                ),
-                                html.Span(str(cat), style={"verticalAlign": "middle"})
-                            ],
-                            style={
-                                "display": "inline-block",
-                                "marginRight": "12px",
-                                "marginBottom": "4px"
-                            }
-                        )
-                    )
-
-                legend_component = html.Div(
-                    [
-                        html.Div(
-                            f"Legend: {selected_feature}",
-                            style={"marginBottom": "4px"}
-                        ),
-                        html.Div(items)
-                    ],
-                    style={"color": "white"}
-                )
-
-    # No feature selected -> textual note for default fire density map
-    else:
-        legend_component = html.Div(
-            "Color map: point density (Datashader 'fire' colormap, eq_hist). "
-            "Brighter = higher local density.",
-            style={"color": "white"}
+        row_comps.append(
+            dbc.Row(
+                cols,
+                justify="center",
+                #className="mb-2",
+                style={
+                    "flex": "1 1 0",
+                    "minHeight": 0,
+                }
+            )
         )
 
-    return row_comps, legend_component
+    # Shared legend only for DR comparison mode
+    legend_component = ""
+    if plot_mode == "dr-comparison":
+        if selected_feature and (selected_feature in df.columns):
+            if pd.api.types.is_numeric_dtype(df[selected_feature]):
+                if df[selected_feature].notna().any():
+                    vmin = float(df[selected_feature].min())
+                    vmax = float(df[selected_feature].max())
+
+                    if vmin != vmax:
+                        cmap_name = continuous_palette if continuous_palette in plt.colormaps() else "viridis"
+                        cmap = cm.get_cmap(cmap_name)
+
+                        colorscale = []
+                        for i in range(256):
+                            frac = i / 255.0
+                            r, g, b, _ = cmap(frac)
+                            colorscale.append([
+                                frac,
+                                f"rgb({int(r*255)}, {int(g*255)}, {int(b*255)})"
+                            ])
+
+                        legend_trace = go.Scatter(
+                            x=[0, 1],
+                            y=[0, 1],
+                            mode='markers',
+                            marker=dict(
+                                size=0.0001,
+                                color=[vmin, vmax],
+                                colorscale=colorscale,
+                                showscale=True,
+                                colorbar=dict(
+                                    title=dict(text=selected_feature, font=dict(color='white')),
+                                    tickfont=dict(color='white'),
+                                    orientation='h',
+                                    x=0.5,
+                                    xanchor='center',
+                                    thickness=15,
+                                    len=0.8,
+                                ),
+                            ),
+                            hoverinfo='none',
+                            showlegend=False
+                        )
+
+                        legend_fig = go.Figure(data=[legend_trace])
+                        legend_fig.update_xaxes(visible=False)
+                        legend_fig.update_yaxes(visible=False)
+                        legend_fig.update_layout(
+                            margin=dict(l=40, r=40, t=10, b=20),
+                            height=120,
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            font=dict(color='white')
+                        )
+
+                        legend_component = dcc.Graph(
+                            figure=legend_fig,
+                            style={"height": "120px"}
+                        )
+                    else:
+                        legend_component = html.Div(
+                            f"Legend: {selected_feature} has a constant value ({vmin}).",
+                            style={"color": "white"}
+                        )
+            else:
+                cats = df[selected_feature].astype("category").cat.categories.tolist()
+                if cats:
+                    if categorical_palette == "Category10" and len(cats) <= 10:
+                        palette = bokeh.palettes.Category10[10][:len(cats)]
+                    else:
+                        palette = glasbey[:len(cats)]
+
+                    items = []
+                    for cat, color in zip(cats, palette):
+                        items.append(
+                            html.Div(
+                                [
+                                    html.Span(
+                                        style={
+                                            "display": "inline-block",
+                                            "width": "12px",
+                                            "height": "12px",
+                                            "marginRight": "6px",
+                                            "backgroundColor": color,
+                                            "border": "1px solid #ccc",
+                                            "verticalAlign": "middle"
+                                        }
+                                    ),
+                                    html.Span(str(cat), style={"verticalAlign": "middle"})
+                                ],
+                                style={
+                                    "display": "inline-block",
+                                    "marginRight": "12px",
+                                    "marginBottom": "4px"
+                                }
+                            )
+                        )
+
+                    legend_component = html.Div(
+                        [
+                            html.Div(
+                                f"Legend: {selected_feature}",
+                                style={"marginBottom": "4px"}
+                            ),
+                            html.Div(items)
+                        ],
+                        style={"color": "white"}
+                    )
+        else:
+            legend_component = html.Div(
+                "Color map: point density (Datashader 'fire' colormap, eq_hist). "
+                "Brighter = higher local density.",
+                style={"color": "white"}
+            )
+    else:
+        legend_component = html.Div()
+
+    plots_grid = html.Div(
+        row_comps,
+        style={
+            "height": "110%",
+            "display": "flex",
+            "flexDirection": "column",
+            "gap": "8px",
+            "minHeight": 0,
+        }
+    )
+
+    if cache_base:
+        return plots_grid, legend_component, serialized_rows
+    else:
+        return plots_grid, legend_component, dash.no_update
+        
+##############################
+# PLOT MODE UI CALLBACK
+##############################
+@app.callback(
+    Output("dr-color-feature-wrapper", "style"),
+    Output("feature-comparison-wrapper", "style"),
+    Output("coordinate-systems-checklist", "multi"),
+    Input("plot-mode-toggle", "value"),
+)
+def toggle_plot_mode_ui(plot_mode):
+    if plot_mode == "feature-comparison":
+        return {"display": "none"}, {"display": "block"}, False   # single DR in feature mode
+    return {"display": "block"}, {"display": "none"}, True        # multi DR in DR mode
+
+##############################
+# CLEAN PLOTS CALLBACK  - triggering button returns all plots to the state they were last time Update Plots was used.
+##############################
+@app.callback(
+    Output('coordinates-plots-container', 'children', allow_duplicate=True),
+    Output('color-legend-container', 'children', allow_duplicate=True),
+    Output('overlay-store', 'data', allow_duplicate=True),
+    Input('clear-plots-button', 'n_clicks'),
+    State('base-plots-store', 'data'),
+    State('color-legend-container', 'children'),
+    prevent_initial_call=True
+)
+def clear_plots_to_base(_n, base_plots_data, current_legend):
+    if not base_plots_data:
+        return dash.no_update, dash.no_update, []
+
+    # Restore last cached base figures without re-running Datashader
+    row_comps = build_plot_grid_from_serialized(base_plots_data)
+
+    # Clear overlay-store so future plot actions start clean
+    return row_comps, current_legend, []
 
 ##############################
 # OVERLAY POINTS CALLBACK
@@ -1061,7 +1607,8 @@ def update_multiple_coord_plots(
 @app.callback(
     Output('overlay-store','data'),
     Input('overlay-points-button','n_clicks'),
-    State({'type':'scatter-plot','index':ALL}, 'selectedData'),
+    State({'type':'scatter-plot','index':ALL,'coordinate_system':ALL}, 'selectedData'),  # match the full graph id shape
+    State({'type':'scatter-plot','index':ALL,'coordinate_system':ALL}, 'id'),   
     State('coordinate-systems-checklist','value'),
     State({'type':'continuous-filter-min','column_name':ALL}, 'value'),
     State({'type':'continuous-filter-min','column_name':ALL}, 'id'),
@@ -1072,33 +1619,40 @@ def update_multiple_coord_plots(
     prevent_initial_call=True
 )
 def overlay_points(
-    n, all_sel, selected_coords,
+    n, all_sel, all_plot_ids, selected_coords,  
     all_min_vals, all_min_ids,
     all_max_vals, all_max_ids,
     all_cat_vals, all_cat_ids
 ):
     fv = {}
-    for v,i in zip(all_min_vals, all_min_ids):
-        fv.setdefault(i["column_name"],{"min":None,"max":None,"cat":[]} )["min"]=v
-    for v,i in zip(all_max_vals, all_max_ids):
-        fv.setdefault(i["column_name"],{"min":None,"max":None,"cat":[]} )["max"]=v
-    for vals,i in zip(all_cat_vals, all_cat_ids):
-        fv.setdefault(i["column_name"],{"min":None,"max":None,"cat":[]} )["cat"]=vals
+    for v, i in zip(all_min_vals, all_min_ids):
+        fv.setdefault(i["column_name"], {"min": None, "max": None, "cat": []})["min"] = v
+    for v, i in zip(all_max_vals, all_max_ids):
+        fv.setdefault(i["column_name"], {"min": None, "max": None, "cat": []})["max"] = v
+    for vals, i in zip(all_cat_vals, all_cat_ids):
+        fv.setdefault(i["column_name"], {"min": None, "max": None, "cat": []})["cat"] = vals
+
+    if isinstance(selected_coords, str):   
+        selected_coords = [selected_coords]
 
     df = load_coordinates_from_db(
-        db_path=db_path,
+        db_path=GLOBAL_DB_PATH,
         coordinate_systems=selected_coords,
-        feature_col=None,
+        feature_cols=None,   
         filter_values=fv
     )
+
     headers = set()
-    for sel, cs in zip(all_sel, selected_coords):
+    # for sel, cs in zip(all_sel, selected_coords):
+    for sel, graph_id in zip(all_sel, all_plot_ids):  
         if sel and 'lassoPoints' in sel:
+            cs = graph_id["coordinate_system"]        
             xcol, ycol = f"x_{cs}", f"y_{cs}"
             pts = list(zip(sel['lassoPoints']['x'], sel['lassoPoints']['y']))
             path = Path(pts)
-            mask = path.contains_points(df[[xcol,ycol]].values)
+            mask = path.contains_points(df[[xcol, ycol]].values)
             headers.update(df.loc[mask, 'header'])
+
     return list(headers)
 
 
@@ -1118,7 +1672,8 @@ def overlay_points(
         Input('export-bins-button','n_clicks'),
     ],
     [
-        State({'type':'scatter-plot','index':ALL}, 'selectedData'),
+        State({'type':'scatter-plot','index':ALL,'coordinate_system':ALL}, 'selectedData'),  # match the full graph id shape
+        State({'type':'scatter-plot','index':ALL,'coordinate_system':ALL}, 'id'),
         State('bin-name-input','value'),
         State('bins-store','data'),
         State({'type':'continuous-filter-min','column_name':ALL}, 'value'),
@@ -1135,7 +1690,7 @@ def overlay_points(
 
 def handle_bin_operations(
     create_clicks, inspect_clicks, export_clicks,
-    all_sel, bin_name, bins_data,
+    all_sel, all_plot_ids, bin_name, bins_data,   
     all_min_vals, all_min_ids,
     all_max_vals, all_max_ids,
     all_cat_vals, all_cat_ids,
@@ -1148,58 +1703,86 @@ def handle_bin_operations(
         bins_data = []
 
     fv = {}
-    for v,i in zip(all_min_vals, all_min_ids):
-        fv.setdefault(i["column_name"],{"min":None,"max":None,"cat":[]} )["min"]=v
-    for v,i in zip(all_max_vals, all_max_ids):
-        fv.setdefault(i["column_name"],{"min":None,"max":None,"cat":[]} )["max"]=v
-    for vals,i in zip(all_cat_vals, all_cat_ids):
-        fv.setdefault(i["column_name"],{"min":None,"max":None,"cat":[]} )["cat"]=vals
+    for v, i in zip(all_min_vals, all_min_ids):
+        fv.setdefault(i["column_name"], {"min": None, "max": None, "cat": []})["min"] = v
+    for v, i in zip(all_max_vals, all_max_ids):
+        fv.setdefault(i["column_name"], {"min": None, "max": None, "cat": []})["max"] = v
+    for vals, i in zip(all_cat_vals, all_cat_ids):
+        fv.setdefault(i["column_name"], {"min": None, "max": None, "cat": []})["cat"] = vals
+
+    if isinstance(selected_coords, str):  
+        selected_coords = [selected_coords]
 
     if ctx_trig == 'create-bin-button':
-        if not any(all_sel) or not bin_name or bin_name.strip()=="":
-            error_message = "Please select points and provide a bin name."
+        # active_lassos = [
+        #     (cs, sel)
+        #     for sel, cs in zip(all_sel, selected_coords)
+        #     if sel and 'lassoPoints' in sel
+        # ]
+        active_lassos = [   #  derive cs from plot ids
+            (graph_id["coordinate_system"], sel)
+            for sel, graph_id in zip(all_sel, all_plot_ids)
+            if sel and 'lassoPoints' in sel
+        ]
+
+        if not bin_name or bin_name.strip() == "":
+            error_message = "Please provide a bin name."
+        elif len(active_lassos) == 0:
+            error_message = "Please create a lasso selection before creating a bin."
+        elif len(active_lassos) > 1:
+            error_message = "Only one lasso may be active. Clear the old lasso before creating a new bin."
         else:
-            polys = {
-                cs: list(zip(sel['lassoPoints']['x'], sel['lassoPoints']['y']))
-                for sel,cs in zip(all_sel, selected_coords)
-                if sel and 'lassoPoints' in sel
-            }
+            active_cs, active_sel = active_lassos[0]
+            polygon = list(zip(
+                active_sel['lassoPoints']['x'],
+                active_sel['lassoPoints']['y']
+            ))
+
             bins_data.append({
                 "bin_name": bin_name,
                 "filters": fv,
-                "coordinate_systems": selected_coords,
-                "polygons": polys
+                "coordinate_system": active_cs,
+                "polygon": polygon
             })
             error_message = f"Bin '{bin_name}' created successfully."
 
     elif ctx_trig == 'inspect-bin-button':
-        if not any(all_sel):
+        active_lassos = [
+            (graph_id["coordinate_system"], sel)
+            for sel, graph_id in zip(all_sel, all_plot_ids)
+            if sel and 'lassoPoints' in sel
+        ]
+
+        if len(active_lassos) == 0:
             error_message = "No lasso selection to inspect."
+        elif len(active_lassos) > 1:
+            error_message = "Only one lasso may be active for inspection."
         else:
+            active_cs, active_sel = active_lassos[0]
+
             df_master = load_coordinates_from_db(
-                db_path=db_path,
-                coordinate_systems=selected_coords,
-                feature_col=color_feature,
+                db_path=GLOBAL_DB_PATH,
+                coordinate_systems=[active_cs],
+                feature_cols=[color_feature] if color_feature else None,  
                 filter_values=fv
             )
-            idxs = set()
-            for sel, cs in zip(all_sel, selected_coords):
-                if sel and 'lassoPoints' in sel:
-                    xcol, ycol = f"x_{cs}", f"y_{cs}"
-                    pts = list(zip(sel['lassoPoints']['x'], sel['lassoPoints']['y']))
-                    path = Path(pts)
-                    mask = path.contains_points(df_master[[xcol,ycol]].values)
-                    idxs.update(df_master.index[mask])
-            if idxs:
-                sub_df = df_master.loc[list(idxs)].copy()
+
+            xcol, ycol = f"x_{active_cs}", f"y_{active_cs}"
+            pts = list(zip(
+                active_sel['lassoPoints']['x'],
+                active_sel['lassoPoints']['y']
+            ))
+            path = Path(pts)
+            mask = path.contains_points(df_master[[xcol, ycol]].values)
+
+            if mask.any():
+                sub_df = df_master.loc[mask].copy()
                 table_content = dash_table.DataTable(
-                    columns=[{"name":c,"id":c} for c in sub_df.columns],
+                    columns=[{"name": c, "id": c} for c in sub_df.columns],
                     data=sub_df.to_dict("records"),
                     page_size=10,
-                    style_table={"overflowX":"auto"},
+                    style_table={"overflowX": "auto"},
                     style_as_list_view=True,
-                    #style_header={"backgroundColor":"#343a40","color":"white"},
-                    #style_data={"backgroundColor":"#2b2b2b","color":"white"},
                 )
                 error_message = f"Inspect Bin: {len(sub_df)} points found."
             else:
@@ -1210,33 +1793,26 @@ def handle_bin_operations(
             error_message = "No bins to export."
         else:
             os.makedirs(output_dir_default, exist_ok=True)
+
             for bin_entry in bins_data:
-                df_bin = load_coordinates_from_db(
-                    db_path=db_path,
-                    coordinate_systems=bin_entry["coordinate_systems"],
+                df_filt = efficient_spatialite_export(
+                    db_path=GLOBAL_DB_PATH,
+                    coordinate_systems=[bin_entry["coordinate_system"]],
+                    polygons={bin_entry["coordinate_system"]: bin_entry["polygon"]},
                     feature_col=None,
                     filter_values=bin_entry["filters"]
                 )
-                idxs = set()
-                for cs,poly in bin_entry["polygons"].items():
-                    xcol, ycol = f"x_{cs}", f"y_{cs}"
-                    path = Path(poly)
-                    mask = path.contains_points(df_bin[[xcol,ycol]].values)
-                    idxs.update(df_bin.index[mask])
-                df_filt = df_bin.loc[list(idxs)]
 
-                # Export CSV as before
                 csv_path = os.path.join(
                     output_dir_default,
                     f"{bin_entry['bin_name']}.csv"
                 )
                 df_filt.to_csv(csv_path, index=False)
 
-                # Chunked FASTQ/FASTA export to avoid "too many SQL variables"
                 if 'header' in df_filt:
                     headers = df_filt['header'].unique().tolist()
                     if headers:
-                        conn = get_connection(db_path)
+                        conn = get_connection(GLOBAL_DB_PATH)
                         try:
                             cursor = conn.cursor()
                             cursor.execute("PRAGMA table_info(fasta);")
@@ -1251,11 +1827,10 @@ def handle_bin_operations(
                                 select_cols_list.append("qualities")
                             select_cols = ", ".join(select_cols_list)
 
-                            # Chunk headers to avoid SQLite var limit
-                            chunk_size = 900  # safely under default 999 limit
+                            chunk_size = 900
                             dfs = []
                             for i in range(0, len(headers), chunk_size):
-                                batch = headers[i:i+chunk_size]
+                                batch = headers[i:i + chunk_size]
                                 placeholders = ", ".join("?" * len(batch))
                                 fasta_q = (
                                     f"SELECT {select_cols} FROM fasta "
@@ -1268,11 +1843,10 @@ def handle_bin_operations(
                                     dfs.append(df_chunk)
 
                             if not dfs:
-                                continue  # nothing to write for this bin
+                                continue
 
                             fasta_df = pd.concat(dfs, ignore_index=True)
 
-                            # Decide FASTQ vs FASTA
                             write_fastq = (
                                 has_qualities_col
                                 and 'qualities' in fasta_df.columns
@@ -1280,7 +1854,11 @@ def handle_bin_operations(
                             )
 
                             def get_output_header(row):
-                                if has_full_header_col and 'full_header' in row and not pd.isna(row['full_header']):
+                                if (
+                                    has_full_header_col
+                                    and 'full_header' in row
+                                    and not pd.isna(row['full_header'])
+                                ):
                                     return row['full_header']
                                 return row['header']
 
@@ -1294,7 +1872,6 @@ def handle_bin_operations(
                                         q = row.get('qualities')
                                         header_out = get_output_header(row)
                                         if pd.isna(q):
-                                            # Fallback: write that read as FASTA if no qual
                                             fh.write(
                                                 f">{header_out}\n{row['sequence']}\n"
                                             )
@@ -1326,18 +1903,20 @@ def handle_bin_operations(
 
     bin_list_table = html.Table([
         html.Thead(html.Tr([
-            html.Th("Bin Name"), html.Th("Coordinate Systems"),
-            html.Th("Polygon(s)"), html.Th("Filters")
+            html.Th("Bin Name"),
+            html.Th("Coordinate System"),
+            html.Th("Polygon"),
+            html.Th("Filters")
         ])),
         html.Tbody([
             html.Tr([
                 html.Td(b["bin_name"]),
-                html.Td(", ".join(b["coordinate_systems"])),
-                html.Td(str(b["polygons"])),
+                html.Td(b["coordinate_system"]),
+                html.Td(str(b["polygon"])),
                 html.Td(str(b["filters"]))
             ]) for b in bins_data
         ])
-    ], style={"color":"white","border":"1px solid #fff"})
+    ], style={"color": "white", "border": "1px solid #fff"})
 
     bin_list_group = dbc.ListGroup(
         [
@@ -1345,10 +1924,13 @@ def handle_bin_operations(
                 [
                     html.Div([
                         html.Strong(b["bin_name"], style={"fontSize": "1rem"}),
-                        html.Span(f" — {', '.join(b['coordinate_systems'])}", style={"marginLeft": "10px", "color": "#ccc"}),
+                        html.Span(
+                            f" — {b['coordinate_system']}",
+                            style={"marginLeft": "10px", "color": "#ccc"}
+                        ),
                     ], style={"marginBottom": "4px"}),
                     html.Div([
-                        html.Small(f"Polygons: {len(b['polygons'])}", style={"color": "#999"}),
+                        html.Small("Polygons: 1", style={"color": "#999"}),
                     ])
                 ],
                 color="dark",
@@ -1360,5 +1942,19 @@ def handle_bin_operations(
 
     return bins_data, error_message, table_content, bin_list_table
 
-if __name__ == '__main__':
-    app.run(debug=False)
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="INTERACTIVE KMER-BASED READ ORDINATION INTERFACE - BIN2WIN"
+    )
+    parser.add_argument("-d", "--database", required=True)
+    parser.add_argument("-o", "--output_dir", default="bins")
+
+    args = parser.parse_args()
+
+    run_dash_app(
+        db_path=args.database,
+        output_dir=args.output_dir
+    )

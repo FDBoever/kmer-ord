@@ -302,6 +302,26 @@ def visualise_db(
     print("-" * 70)
 
 
+@app.command("bin", rich_help_panel="Analysis")
+def run_binner(
+    db_path: Path = typer.Option(..., "-d", "--db", help="Path to SQLite DB"),
+    output_dir: Path = typer.Option("bins", "-o", "--output", help="Output dir for bins"),
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8050, "--port"),
+):
+    """
+    Launch interactive Dash app for binning sequences.
+    """
+    from kmer_ord.dash.b2w import run_dash_app
+
+    run_dash_app(
+        db_path=str(db_path),
+        output_dir=str(output_dir),
+        host=host,
+        port=port,
+    )
+
+
 # -----------------------------
 # fastq to fasta
 @app.command("fastq-to-fasta", rich_help_panel="Modules")
