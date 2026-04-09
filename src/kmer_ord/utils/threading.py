@@ -1,6 +1,6 @@
-import os
-
 def set_global_threads(threads: int):
+    import os
+    import numba
 
     vars = [
         "OMP_NUM_THREADS",
@@ -13,3 +13,6 @@ def set_global_threads(threads: int):
 
     for v in vars:
         os.environ[v] = str(threads)
+
+    #additionally set numba threads through numba api
+    numba.set_num_threads(threads)

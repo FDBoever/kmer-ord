@@ -1,4 +1,6 @@
 # src/kmer_ord/cli/main.py
+from asyncio import threads
+
 import typer
 from pathlib import Path
 import platform
@@ -75,9 +77,10 @@ def run_pipeline(
     start_time = datetime.datetime.now()
     print_header(start_time)    
     set_global_threads(threads)
-
-    info(f"Using {threads} threads")
-
+    
+    import numba
+    info(f"Using {threads} threads / {numba.get_num_threads()} numba threads")
+    
     info("loading packages")
 
     from kmer_ord.io.sequence import fastq_to_fasta
@@ -169,9 +172,11 @@ def discover_pipeline(
     print_header(start_time)
 
     section("Starting kmer-ord clustering pipeline...")
-    
     set_global_threads(threads)
     info(f"Using {threads} threads")
+    import numba
+    info(f"Using {numba.get_num_threads()} Numba threads")
+    
 
     info("loading packages")
     from kmer_ord.workflow.operations import (
