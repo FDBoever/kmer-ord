@@ -589,6 +589,144 @@ def build_plot_grid_from_serialized(serialized_plots):
     )
 
 ##############################
+# BIN LIST COMPONENT
+##############################
+
+def _status_bar(msg: str):
+    """Return a slim single-line status strip, or None if msg is empty."""
+    if not msg:
+        return None
+    msg_lower = msg.lower()
+    if "successfully" in msg_lower or "exported" in msg_lower:
+        accent, text_col = "#2e7d32", "#a5d6a7"   # green
+    elif "found" in msg_lower and "0 points" not in msg_lower:
+        accent, text_col = "#1565c0", "#90caf9"   # blue
+    else:
+        accent, text_col = "#7b3f00", "#ffcc80"   # amber
+
+    return html.Div(
+        msg,
+        style={
+            "borderLeft": f"3px solid {accent}",
+            "backgroundColor": "#1e1e1e",
+            "color": text_col,
+            "fontSize": "0.78rem",
+            "padding": "4px 10px",
+            "borderRadius": "3px",
+            "lineHeight": "1.4",
+        }
+    )
+
+
+def _format_bin_filters(fv):
+    """Return a compact inline string for all active filters, or empty string."""
+    parts = []
+    for col, bounds in (fv or {}).items():
+        lo   = bounds.get("min")
+        hi   = bounds.get("max")
+        cats = [v for v in (bounds.get("cat") or []) if v is not None]
+        if lo is not None or hi is not None:
+            lo_s = f"{lo:g}" if lo is not None else "…"
+            hi_s = f"{hi:g}" if hi is not None else "…"
+            parts.append(f"{col}: {lo_s}–{hi_s}")
+        if cats:
+            cat_s = ", ".join(str(v) for v in cats[:2])
+            if len(cats) > 2:
+                cat_s += f" +{len(cats) - 2}"
+            parts.append(f"{col}: {cat_s}")
+    return "  ·  ".join(parts)
+
+
+def _build_bin_list(bins_data):
+    """Render a compact single-line list of bins for the main panel."""
+    if not bins_data:
+        return None
+
+    _strip = {
+        "display": "flex",
+        "alignItems": "center",
+        "backgroundColor": "#252525",
+        "border": "1px solid #333",
+        "borderRadius": "5px",
+        "marginBottom": "4px",
+        "padding": "5px 10px",
+        "gap": "10px",
+        "minHeight": "0",
+    }
+    _sep = {"color": "#444", "fontSize": "0.75rem", "flexShrink": "0"}
+
+    header = html.Div(
+        "Bins",
+        style={
+            "fontSize": "0.7rem",
+            "textTransform": "uppercase",
+            "letterSpacing": "1px",
+            "color": "#555",
+            "marginBottom": "6px",
+        }
+    )
+
+    rows = [header]
+    for idx, b in enumerate(bins_data):
+        n_pts       = len(b.get("polygon", []))
+        filter_str  = _format_bin_filters(b.get("filters", {}))
+
+        label_parts = [
+            html.Span(
+                b["bin_name"],
+                style={"fontWeight": "600", "fontSize": "0.82rem", "color": "#ddd", "whiteSpace": "nowrap"}
+            ),
+            html.Span("·", style=_sep),
+            html.Span(
+                b["coordinate_system"],
+                style={"fontSize": "0.78rem", "color": "#888", "whiteSpace": "nowrap"}
+            ),
+            html.Span("·", style=_sep),
+            html.Span(
+                f"{n_pts} pts",
+                style={"fontSize": "0.78rem", "color": "#666", "whiteSpace": "nowrap"}
+            ),
+        ]
+        if filter_str:
+            label_parts += [
+                html.Span("·", style=_sep),
+                html.Span(
+                    filter_str,
+                    style={"fontSize": "0.75rem", "color": "#555", "whiteSpace": "nowrap",
+                           "overflow": "hidden", "textOverflow": "ellipsis"}
+                ),
+            ]
+
+        rows.append(
+            html.Div(
+                [
+                    html.Div(label_parts, style={"display": "flex", "alignItems": "center",
+                                                 "gap": "8px", "flex": "1", "minWidth": "0",
+                                                 "overflow": "hidden"}),
+                    html.Button(
+                        "×",
+                        id={"type": "remove-bin-btn", "index": idx},
+                        n_clicks=0,
+                        style={
+                            "background": "none",
+                            "border": "none",
+                            "color": "#555",
+                            "fontSize": "1rem",
+                            "lineHeight": "1",
+                            "padding": "0 2px",
+                            "cursor": "pointer",
+                            "flexShrink": "0",
+                        }
+                    ),
+                ],
+                style=_strip,
+            )
+        )
+
+    return html.Div(rows)
+
+
+##############################
 # BUILD SIDEBAR + LAYOUT
 ##############################
 ##############################
@@ -1025,38 +1163,110 @@ def build_layout():
                                     "flex": "0 0 auto",
                                 }
                             ),
-                            dbc.Row(
+                            html.Div(
                                 [
-                                    dbc.Col(
-                                        dbc.InputGroup(
-                                            [
-                                                dbc.InputGroupText("Bin Name"),
-                                                dbc.Input(
-                                                    id='bin-name-input',
-                                                    type='text',
-                                                    placeholder='Enter bin name',
-                                                    style={"background": "#383B3E", "color": "#ffffff"}
-                                                ),
-                                            ],
-                                            className="mb-3",
-                                            size="sm",
-                                        ),
-                                        width=4
+                                    dbc.InputGroup(
+                                        [
+                                            dbc.InputGroupText(
+                                                "Bin name",
+                                                style={
+                                                    "backgroundColor": "#1e1e1e",
+                                                    "border": "1px solid #3a3a3a",
+                                                    "color": "#777",
+                                                    "fontSize": "0.75rem",
+                                                    "padding": "4px 10px",
+                                                }
+                                            ),
+                                            dbc.Input(
+                                                id='bin-name-input',
+                                                type='text',
+                                                placeholder='Enter bin name',
+                                                style={
+                                                    "backgroundColor": "#252525",
+                                                    "border": "1px solid #3a3a3a",
+                                                    "borderLeft": "none",
+                                                    "color": "#ddd",
+                                                    "fontSize": "0.78rem",
+                                                }
+                                            ),
+                                        ],
+                                        size="sm",
+                                        style={"width": "260px", "flexShrink": "0"},
                                     ),
-                                    dbc.Col(dbc.Button("Create Bin", id='create-bin-button',
-                                                    style={"backgroundColor": "#222","border": "1px solid #333","color": "#ddd","fontSize": "0.75rem","padding": "6px 10px"}), width=2),
-                                    dbc.Col(dbc.Button("Inspect Bin", id='inspect-bin-button',
-                                                    style={"backgroundColor": "#222","border": "1px solid #333","color": "#ddd","fontSize": "0.75rem","padding": "6px 10px"}), width=2),
-                                    dbc.Col(dbc.Button("Overlay Points", id='overlay-points-button',
-                                                    style={"backgroundColor": "#222","border": "1px solid #333","color": "#ddd","fontSize": "0.75rem","padding": "6px 10px"}), width=2),
-                                    dbc.Col(dbc.Button("Clear Plots", id='clear-plots-button',
-                                                    style={"backgroundColor": "#222","border": "1px solid #333","color": "#ddd","fontSize": "0.75rem","padding": "6px 10px"}), width=2),   
+                                    html.Div(style={"width": "1px", "backgroundColor": "#2e2e2e", "alignSelf": "stretch"}),
+                                    html.Div(
+                                        [
+                                            dbc.Button(
+                                                "Create Bin",
+                                                id='create-bin-button',
+                                                size="sm",
+                                                style={
+                                                    "backgroundColor": "#1e1e1e",
+                                                    "border": "1px solid #4a4a4a",
+                                                    "color": "#ccc",
+                                                    "fontSize": "0.75rem",
+                                                    "padding": "4px 14px",
+                                                    "whiteSpace": "nowrap",
+                                                }
+                                            ),
+                                            dbc.Button(
+                                                "Inspect Bin",
+                                                id='inspect-bin-button',
+                                                size="sm",
+                                                style={
+                                                    "backgroundColor": "#1e1e1e",
+                                                    "border": "1px solid #3a3a3a",
+                                                    "color": "#888",
+                                                    "fontSize": "0.75rem",
+                                                    "padding": "4px 14px",
+                                                    "whiteSpace": "nowrap",
+                                                }
+                                            ),
+                                            dbc.Button(
+                                                "Overlay Points",
+                                                id='overlay-points-button',
+                                                size="sm",
+                                                style={
+                                                    "backgroundColor": "#1e1e1e",
+                                                    "border": "1px solid #3a3a3a",
+                                                    "color": "#888",
+                                                    "fontSize": "0.75rem",
+                                                    "padding": "4px 14px",
+                                                    "whiteSpace": "nowrap",
+                                                }
+                                            ),
+                                            dbc.Button(
+                                                "Clear Plots",
+                                                id='clear-plots-button',
+                                                size="sm",
+                                                style={
+                                                    "backgroundColor": "#1e1e1e",
+                                                    "border": "1px solid #3a3a3a",
+                                                    "color": "#666",
+                                                    "fontSize": "0.75rem",
+                                                    "padding": "4px 14px",
+                                                    "whiteSpace": "nowrap",
+                                                }
+                                            ),
+                                        ],
+                                        style={
+                                            "display": "flex",
+                                            "gap": "6px",
+                                            "alignItems": "center",
+                                            "flexWrap": "wrap",
+                                        }
+                                    ),
                                 ],
-                                className="mb-3"
+                                style={
+                                    "display": "flex",
+                                    "alignItems": "center",
+                                    "gap": "14px",
+                                    "marginBottom": "10px",
+                                    "flexWrap": "wrap",
+                                }
                             ),
-                            html.H4("Bins List"),
+                            html.Div(id='error-message', className="mb-2"),
                             html.Div(id='bin-list-container', className="mb-3"),
-                            html.Div(id='error-message', className="mb-3"),
                             html.Div(id='bin-table-container', className="mt-3")
                         ]
                     )
@@ -1725,8 +1935,11 @@ def handle_bin_operations(
             if sel and 'lassoPoints' in sel
         ]
 
+        existing_names = {b["bin_name"] for b in bins_data}
         if not bin_name or bin_name.strip() == "":
             error_message = "Please provide a bin name."
+        elif bin_name.strip() in existing_names:
+            error_message = f"A bin named '{bin_name.strip()}' already exists. Choose a different name."
         elif len(active_lassos) == 0:
             error_message = "Please create a lasso selection before creating a bin."
         elif len(active_lassos) > 1:
@@ -1901,46 +2114,29 @@ def handle_bin_operations(
                 f"(FASTQ if qualities present, otherwise FASTA; using full headers when available)."
             )
 
-    bin_list_table = html.Table([
-        html.Thead(html.Tr([
-            html.Th("Bin Name"),
-            html.Th("Coordinate System"),
-            html.Th("Polygon"),
-            html.Th("Filters")
-        ])),
-        html.Tbody([
-            html.Tr([
-                html.Td(b["bin_name"]),
-                html.Td(b["coordinate_system"]),
-                html.Td(str(b["polygon"])),
-                html.Td(str(b["filters"]))
-            ]) for b in bins_data
-        ])
-    ], style={"color": "white", "border": "1px solid #fff"})
+    return bins_data, _status_bar(error_message), table_content, _build_bin_list(bins_data)
 
-    bin_list_group = dbc.ListGroup(
-        [
-            dbc.ListGroupItem(
-                [
-                    html.Div([
-                        html.Strong(b["bin_name"], style={"fontSize": "1rem"}),
-                        html.Span(
-                            f" — {b['coordinate_system']}",
-                            style={"marginLeft": "10px", "color": "#ccc"}
-                        ),
-                    ], style={"marginBottom": "4px"}),
-                    html.Div([
-                        html.Small("Polygons: 1", style={"color": "#999"}),
-                    ])
-                ],
-                color="dark",
-                className="mb-1"
-            )
-            for b in bins_data
-        ]
-    )
 
-    return bins_data, error_message, table_content, bin_list_table
+@app.callback(
+    Output('bins-store', 'data', allow_duplicate=True),
+    Output('bin-list-container', 'children', allow_duplicate=True),
+    Input({'type': 'remove-bin-btn', 'index': ALL}, 'n_clicks'),
+    State('bins-store', 'data'),
+    prevent_initial_call=True,
+)
+def remove_bin(n_clicks_list, bins_data):
+    if not any(n_clicks_list):
+        from dash.exceptions import PreventUpdate
+        raise PreventUpdate
+    bins_data = bins_data or []
+    triggered = ctx.triggered_id
+    if triggered is None:
+        from dash.exceptions import PreventUpdate
+        raise PreventUpdate
+    idx = triggered["index"]
+    if 0 <= idx < len(bins_data):
+        bins_data = [b for i, b in enumerate(bins_data) if i != idx]
+    return bins_data, _build_bin_list(bins_data)
 
 
 if __name__ == "__main__":
