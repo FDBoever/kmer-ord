@@ -8,12 +8,14 @@ setup_app = typer.Typer(help="Setup external dependencies for kmerord.")
 
 @setup_app.command("setup", rich_help_panel="Installation")
 def setup(
-    force: bool = typer.Option(False, "-f","--force", help="Recreate environments even if they already exist.")):
+    force: bool = typer.Option(False, "-f", "--force", help="Recreate environments even if they already exist."),
+    with_tiara: bool = typer.Option(True, "--tiara/--no-tiara", help="Install the Tiara taxonomic classification environment (default: on).")):
     """
     Setup all required external dependencies:
-    - tools environment (infernal, barrnap, rust)
-    - tiara environment
+    - tools environment (kmer-counter, rust)
+    - tiara environment (optional, pass --no-tiara to skip)
     - kmer-counter Rust installation from GitHub
+    - rDNA-miner environment
     """
     from kmer_ord.system.env_manager import (TOOLS_ENV, TIARA_ENV, RDNA_ENV,
                                              env_exists, create_tools_env, create_rdna_env,
@@ -35,17 +37,20 @@ def setup(
         create_tools_env(TOOLS_ENV)
         info(f"{TOOLS_ENV} created.")
 
-    # Tiara environment
-    if env_exists(TIARA_ENV):
-        if force:
-            info(f"{TIARA_ENV} exists. Recreating (--force enabled)...")
-            create_tiara_env(TIARA_ENV, recreate=True)
+    # Tiara environment (optional)
+    if with_tiara:
+        if env_exists(TIARA_ENV):
+            if force:
+                info(f"{TIARA_ENV} exists. Recreating (--force enabled)...")
+                create_tiara_env(TIARA_ENV, recreate=True)
+            else:
+                info(f"{TIARA_ENV} already exists. Skipping.")
         else:
-            info(f"{TIARA_ENV} already exists. Skipping.")
+            info(f"Creating {TIARA_ENV}...")
+            create_tiara_env(TIARA_ENV)
+            info(f"{TIARA_ENV} created.")
     else:
-        info(f"Creating {TIARA_ENV}...")
-        create_tiara_env(TIARA_ENV)
-        info(f"{TIARA_ENV} created.")
+        info("Skipping Tiara environment (--no-tiara).")
 
     # Rust GitHub tool
     section("Installing Rust-based tool...")
@@ -74,15 +79,18 @@ def setup(
 
     tools_to_check = [
         ("kmer-counter", TOOLS_ENV, ["--help"]),
-        ("tiara", TIARA_ENV, ["--help"]),
+    ]
+    if with_tiara:
+        tools_to_check.append(("tiara", TIARA_ENV, ["--help"]))
+    tools_to_check += [
         ("barrnap", RDNA_ENV, ["--help"]),
         ("flye", RDNA_ENV, ["--help"]),
         ("minimap2", RDNA_ENV, ["--help"]),
         ("samtools", RDNA_ENV, ["--help"]),
         ("Rscript", RDNA_ENV, ["--version"]),
     ]
-    success = True
 
+    success = True
     for tool, env, args in tools_to_check:
         if not check_tool(tool, env=env, args=args):
             success = False
@@ -91,7 +99,6 @@ def setup(
         print("-" * 70)
         info("\nAll tools verified successfully")
         info("\nSetup complete. kmerord is ready to use.")
-
     else:
         print("-" * 70)
         warn("Some tools failed verification. Please check installation or PATH.")

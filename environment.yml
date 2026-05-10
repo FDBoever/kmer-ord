@@ -21,4 +21,5 @@ dependencies:
   - matplotlib
   - seaborn
   - setuptools=65.5.0
+  - tqdm
   - pip

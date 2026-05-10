@@ -30,7 +30,8 @@ dependencies = [
     "datashader",
     "dash",
     "dash-bootstrap-components",
-    "bokeh"
+    "bokeh",
+    "tqdm"
 ]
 
 [project.scripts]

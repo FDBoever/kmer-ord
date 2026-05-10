@@ -180,43 +180,50 @@ def create_coordinates_table(conn, df: pd.DataFrame):
 
 def populate_coordinates_table(conn, df: pd.DataFrame, methods):
     """
-    Populate the coordinates table using sequence_id strings instead of numeric indices.
+    Populate the coordinates table using batch inserts for performance.
     """
-    import pandas as pd
     cursor = conn.cursor()
+
+    # Sort methods for stable column ordering
+    methods = sorted(methods)
+
+    # Determine dimensionality per method
+    method_dims = {}
+    for method in methods:
+        i = 1
+        while f"{method}_{i}" in df.columns:
+            i += 1
+        method_dims[method] = i - 1
+
+    # Validate dims and build vectorized WKT series
+    wkt_series = {}
+    for method in methods:
+        n = method_dims[method]
+        if n == 2:
+            wkt_series[method] = (
+                "POINT(" + df[f"{method}_1"].astype(str) + " " + df[f"{method}_2"].astype(str) + ")"
+            )
+        elif n == 3:
+            wkt_series[method] = (
+                "POINT Z(" + df[f"{method}_1"].astype(str) + " "
+                + df[f"{method}_2"].astype(str) + " "
+                + df[f"{method}_3"].astype(str) + ")"
+            )
+        else:
+            raise ValueError(f"{method} must have 2 or 3 dimensions.")
+
+    # Build SQL once
+    columns = ["sequence_id"] + methods
+    placeholders = ["?"] + [f"ST_GeomFromText(?, 0)" for _ in methods]
+    insert_sql = f"INSERT INTO coordinates ({','.join(columns)}) VALUES ({','.join(placeholders)});"
+
+    # Build all rows as list of tuples
+    sequence_ids = df.iloc[:, 0].tolist()
+    wkt_arrays = [wkt_series[m].tolist() for m in methods]
+    rows = list(zip(sequence_ids, *wkt_arrays))
+
     conn.execute("BEGIN TRANSACTION;")
-
-    for _, row in df.iterrows():
-        sequence_id = row.iloc[0]  # this should now be the real sequence_id string
-
-        columns = ["sequence_id"]
-        values = [sequence_id]
-        placeholders = ["?"]
-
-        for method in methods:
-            dims = []
-            i = 1
-            while f"{method}_{i}" in df.columns:
-                dims.append(row[f"{method}_{i}"])
-                i += 1
-
-            if len(dims) == 2:
-                wkt = f"POINT({dims[0]} {dims[1]})"
-            elif len(dims) == 3:
-                wkt = f"POINT Z({dims[0]} {dims[1]} {dims[2]})"
-            else:
-                raise ValueError(f"{method} must have 2 or 3 dimensions.")
-
-            columns.append(method)
-            values.append(wkt)
-            placeholders.append("ST_GeomFromText(?, 0)")
-
-        insert_sql = f"""
-            INSERT INTO coordinates ({','.join(columns)})
-            VALUES ({','.join(placeholders)});
-        """
-        cursor.execute(insert_sql, values)
-
+    cursor.executemany(insert_sql, rows)
     conn.commit()
 
 
@@ -293,6 +300,118 @@ def add_dr_and_clusters_to_db(db_path: Path, embedding_files: list[Path], cluste
     conn.commit()
     conn.close()
     return db_path
+
+# ---------------------------------------------------------
+# FEATURE INJECTION
+# ---------------------------------------------------------
+
+def inject_features(db_path: Path, input_df: "pd.DataFrame") -> dict:
+    """
+    Merge new columns from input_df into the features table, keyed on sequence_id.
+
+    Rules
+    -----
+    - Left join: every sequence already in the DB is preserved.
+    - Columns already present in the features table are skipped (existing values win).
+    - Input rows whose sequence_id has no match in the DB are silently dropped.
+    - DB sequences with no matching row in the input get NULL for all new columns.
+    - Column names that contain characters outside [A-Za-z0-9_\-.] are rejected to
+      prevent SQL identifier injection.
+
+    Returns a report dict consumed by the CLI for on-screen output.
+    """
+    import sqlite3
+    import re
+    import pandas as pd
+
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.cursor()
+
+    try:
+        # Verify features table exists
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='features';"
+        )
+        if not cursor.fetchone():
+            raise RuntimeError(
+                "No 'features' table found in the database. "
+                "Run the full projection pipeline first."
+            )
+
+        # Current features columns
+        cursor.execute("PRAGMA table_info(features);")
+        existing_cols = {row[1] for row in cursor.fetchall()}
+
+        # Sequence IDs currently in DB
+        db_seqids = {
+            row[0]
+            for row in cursor.execute("SELECT sequence_id FROM features;").fetchall()
+        }
+
+        input_seqids = set(input_df["sequence_id"])
+        matched      = input_seqids & db_seqids
+        unmatched_input = input_seqids - db_seqids
+        unmatched_db    = db_seqids   - input_seqids
+
+        if not matched:
+            raise RuntimeError(
+                f"None of the {len(input_seqids)} sequence_id value(s) in the input file "
+                f"match the {len(db_seqids)} sequence_id value(s) in the database. "
+                "Verify that your input file was produced with the same dataset."
+            )
+
+        # Split columns into new vs already-present
+        data_cols    = [c for c in input_df.columns if c != "sequence_id"]
+        skipped_cols = [c for c in data_cols if c in existing_cols]
+        new_cols     = [c for c in data_cols if c not in existing_cols]
+
+        # Guard against unsafe identifier characters
+        safe_re = re.compile(r'^[A-Za-z0-9_\-\.]+$')
+        unsafe_cols = [c for c in new_cols if not safe_re.match(c)]
+        if unsafe_cols:
+            raise ValueError(
+                f"Column name(s) contain characters not allowed in SQL identifiers "
+                f"and cannot be injected: {unsafe_cols}"
+            )
+
+        # Only update rows whose sequence_id exists in the DB
+        matched_df = input_df[input_df["sequence_id"].isin(db_seqids)].copy()
+
+        conn.execute("BEGIN TRANSACTION;")
+
+        for col in new_cols:
+            dtype = input_df[col].dtype
+            if pd.api.types.is_integer_dtype(dtype):
+                sqltype = "INTEGER"
+            elif pd.api.types.is_float_dtype(dtype):
+                sqltype = "REAL"
+            else:
+                sqltype = "TEXT"
+
+            cursor.execute(f'ALTER TABLE features ADD COLUMN "{col}" {sqltype};')
+
+            seqids = matched_df["sequence_id"].tolist()
+            vals   = [None if pd.isna(v) else v for v in matched_df[col].tolist()]
+
+            cursor.executemany(
+                f'UPDATE features SET "{col}" = ? WHERE sequence_id = ?;',
+                list(zip(vals, seqids)),
+            )
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+    return {
+        "injected_cols":   new_cols,
+        "skipped_cols":    skipped_cols,
+        "matched":         len(matched),
+        "unmatched_input": len(unmatched_input),
+        "unmatched_db":    len(unmatched_db),
+        "total_db":        len(db_seqids),
+    }
+
 
 # ---------------------------------------------------------
 # DATABASE INSPECTION (DEBUGGING / QA)

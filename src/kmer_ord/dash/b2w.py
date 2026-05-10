@@ -1125,7 +1125,7 @@ def build_layout():
 )
 def populate_categorical_options(matching_id):
     col = matching_id["column_name"]
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(GLOBAL_DB_PATH)
     try:
         res = conn.execute(f"SELECT DISTINCT {col} FROM features "
                            f"ORDER BY {col} LIMIT 200;").fetchall()

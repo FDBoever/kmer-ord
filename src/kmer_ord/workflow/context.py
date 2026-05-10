@@ -124,3 +124,46 @@ class DBContext:
 
     def get(self, name: str):
         return self.artifacts[name]
+
+
+class MatrixContext:
+    """Lightweight context for matrix-based workflows that skip FASTA input."""
+
+    def __init__(self, matrix_path: Path, output_dir: Path, force: bool = False):
+        self.input_file = Path(matrix_path)
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.force = force
+        self.artifacts: Dict[str, Path] = {}
+        self.logger = logging.getLogger("kmer-ord")
+        self.register("kmer_matrix", matrix_path)
+
+    def register(self, name: str, path):
+        if isinstance(path, (list, tuple)):
+            self.artifacts[name] = [Path(p) for p in path]
+        else:
+            self.artifacts[name] = Path(path)
+
+    def get(self, name: str):
+        if name not in self.artifacts:
+            raise ValueError(f"Artifact '{name}' not found in context.")
+        return self.artifacts[name]
+
+    def artifact_path(self, name: str, subdir: str = None, suffix: str = None) -> Path:
+        base = self.input_file.stem
+        suffix = suffix or ".dat"
+        path = self.output_dir
+        if subdir:
+            path = path / subdir
+            path.mkdir(parents=True, exist_ok=True)
+        return path / f"{base}_{name}{suffix}"
+
+    def exists(self, name: str) -> bool:
+        if name not in self.artifacts:
+            return False
+        if self.force:
+            return False
+        artifact = self.artifacts[name]
+        if isinstance(artifact, list):
+            return all(p.exists() for p in artifact)
+        return artifact.exists()

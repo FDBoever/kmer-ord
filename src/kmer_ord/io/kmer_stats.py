@@ -36,7 +36,7 @@ def calculate_kmer_metrics_chunk(kmer_df: pd.DataFrame) -> pd.DataFrame:
         shannon_bits = -np.sum(np.where(positive, probs * np.log2(probs), 0.0), axis=1)
 
     metrics_chunk = pd.DataFrame(
-        {"total_nonzero_kmers": total_nonzero,
+        {"total_nonzero_kmers": row_sums.astype("int64"),
          "num_unique_kmers": total_nonzero,
          "shannon_evenness": shannon_nats,
          "shannon_diversity": shannon_bits},

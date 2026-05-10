@@ -415,18 +415,24 @@ class SpatialiteDatabase(Operation):
 
         # COORDINATES TABLE
         embedding_files = context.get("dr_embeddings")
+        if not isinstance(embedding_files, list):
+            embedding_files = [embedding_files]
 
+        coords_df = None
         for emb_file in embedding_files:
-            # Load coordinates (no sequence_id)
-            coords_df = pd.read_csv(emb_file, sep="\t")
-            # If sequence_id is missing, add it from features_df
-            if "sequence_id" not in coords_df.columns:
-                coords_df["sequence_id"] = features_df["sequence_id"].values
+            df_emb = pd.read_csv(emb_file, sep="\t")
+            if "sequence_id" not in df_emb.columns:
+                df_emb["sequence_id"] = features_df["sequence_id"].values
 
-            # Ensure sequence_id is the first column
-            cols = ["sequence_id"] + [c for c in coords_df.columns if c != "sequence_id"]
-            coords_df = coords_df[cols]
-            
+            if coords_df is None:
+                coords_df = df_emb
+            else:
+                new_cols = [c for c in df_emb.columns if c != "sequence_id" and c not in coords_df.columns]
+                coords_df = coords_df.merge(df_emb[["sequence_id"] + new_cols], on="sequence_id", how="inner")
+
+        cols = ["sequence_id"] + [c for c in coords_df.columns if c != "sequence_id"]
+        coords_df = coords_df[cols]
+
         methods = create_coordinates_table(conn, coords_df)
         populate_coordinates_table(conn, coords_df, methods)
 

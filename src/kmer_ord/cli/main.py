@@ -1,6 +1,4 @@
 # src/kmer_ord/cli/main.py
-from asyncio import threads
-
 import typer
 from pathlib import Path
 import platform
@@ -65,6 +63,9 @@ def run_pipeline(
     keep_pcs: int = typer.Option(None,"--keep-pcs", help="Number of principal components to retain"),
     keep_variance: float = typer.Option(None,"--keep-variance",help="Variance threshold for PCA (e.g. 0.9)"),
     screen_params: bool = typer.Option(False, "--screen_params", help="Run parameter screening for supported DR methods"),
+
+    # --- Tiara ---
+    run_tiara: bool = typer.Option(False, "--tiara/--no-tiara", help="Run Tiara taxonomic classification and include results in the feature table (requires Tiara environment from kmer-ord setup)."),
 ):
     """
     [+] Projection pipeline:
@@ -72,15 +73,15 @@ def run_pipeline(
     compute sequence-level metrics, and generate a low-dimensional
     (2D/3D) embedding that captures geometric relationships in k-mer space.
     Results are stored in the database for dowstream exploration and annotation.
-    | fastq -> fasta -> sequence stats -> kmer-counting -> DR -> database |
+    | fastq -> fasta -> sequence stats -> kmer-counting -> [tiara] -> DR -> database |
     """
     start_time = datetime.datetime.now()
-    print_header(start_time)    
+    print_header(start_time)
     set_global_threads(threads)
-    
+
     import numba
     info(f"Using {threads} threads / {numba.get_num_threads()} numba threads")
-    
+
     info("loading packages")
 
     from kmer_ord.io.sequence import fastq_to_fasta
@@ -99,7 +100,15 @@ def run_pipeline(
         FastaStats(),
         KmerCount(kmer_length=kmer_length, threads=threads),
         KmerMetrics(chunksize=1000, cpus=threads),
-        Tiara(threads=threads),
+    ]
+
+    if run_tiara:
+        info("Tiara classification enabled.")
+        operations.append(Tiara(threads=threads))
+    else:
+        info("Tiara classification skipped (pass --tiara to enable).")
+
+    operations += [
         MatrixPreprocessing(
             normalisations=norm_list,
             pca_dim_red=pca_pre,
@@ -110,7 +119,6 @@ def run_pipeline(
             methods=method_list,
             dims=dims,
             scale=scale,
-            #seed=seed,
             screen_params=screen_params,),
         FeatureMerge(),
         SpatialiteDatabase()]
@@ -307,6 +315,135 @@ def visualise_db(
     print("-" * 70)
 
 
+@app.command("inject", rich_help_panel="Analysis")
+def inject_features_cmd(
+    db_path: Path = typer.Option(..., "-d", "--db", help="Path to the SQLite/SpatiaLite database"),
+    input_file: Path = typer.Option(..., "-i", "--input", help="Tab-separated file (.tsv/.txt) with sequence_id column and new feature columns to add"),
+):
+    """
+    Inject new feature columns from a TSV file into the database features table.
+
+    \b
+    Rules:
+    - First column must be named 'sequence_id' (matches the pipeline convention)
+    - All sequence_ids in the database are preserved (left join)
+    - Sequences in the input with no DB match are ignored
+    - Sequences in the DB with no input row get NULL for the new columns
+    - Columns whose name already exists in the features table are skipped
+    - Duplicate sequence_ids in the input file are rejected
+    """
+    import pandas as pd
+    from kmer_ord.io.database import inject_features
+
+    print("-" * 70)
+    section("Starting feature injection...")
+
+    # ------------------------------------------------------------------
+    # Input file checks
+    # ------------------------------------------------------------------
+    if not input_file.exists():
+        warn(f"Input file not found: {input_file}")
+        raise typer.Exit(1)
+
+    try:
+        input_df = pd.read_csv(input_file, sep="\t")
+    except Exception as e:
+        warn(f"Could not read input file as tab-separated: {e}")
+        raise typer.Exit(1)
+
+    if input_df.empty:
+        warn("Input file is empty.")
+        raise typer.Exit(1)
+
+    if "sequence_id" not in input_df.columns:
+        warn(
+            f"Input file must contain a 'sequence_id' column. "
+            f"Columns found: {list(input_df.columns)}"
+        )
+        raise typer.Exit(1)
+
+    if input_df.columns[0] != "sequence_id":
+        warn(
+            f"Expected 'sequence_id' as the first column but found '{input_df.columns[0]}'. "
+            "Proceeding — the join will still work."
+        )
+
+    dupes = input_df["sequence_id"][input_df["sequence_id"].duplicated(keep=False)].unique()
+    if len(dupes):
+        warn(
+            f"Duplicate sequence_id values detected in the input file ({len(dupes)} affected IDs). "
+            "Resolve duplicates before injecting."
+        )
+        warn(f"  Examples: {list(dupes[:5])}")
+        raise typer.Exit(1)
+
+    data_cols = [c for c in input_df.columns if c != "sequence_id"]
+    if not data_cols:
+        warn("Input file has no columns beyond 'sequence_id'. Nothing to inject.")
+        raise typer.Exit(1)
+
+    info(f"Input: {len(input_df)} rows, {len(data_cols)} data column(s): {data_cols}")
+
+    # ------------------------------------------------------------------
+    # Database checks
+    # ------------------------------------------------------------------
+    if not db_path.exists():
+        warn(f"Database file not found: {db_path}")
+        raise typer.Exit(1)
+
+    # ------------------------------------------------------------------
+    # Inject
+    # ------------------------------------------------------------------
+    try:
+        report = inject_features(db_path, input_df)
+    except (RuntimeError, ValueError) as e:
+        warn(str(e))
+        raise typer.Exit(1)
+    except Exception as e:
+        warn(f"Unexpected error during injection: {e}")
+        raise typer.Exit(1)
+
+    # ------------------------------------------------------------------
+    # Report
+    # ------------------------------------------------------------------
+    print("-" * 70)
+    info(
+        f"Sequence ID coverage: {report['matched']} / {report['total_db']} "
+        "database sequences matched."
+    )
+
+    if report["unmatched_input"]:
+        warn(
+            f"{report['unmatched_input']} sequence_id(s) in the input file had no "
+            "match in the database and were ignored."
+        )
+
+    if report["unmatched_db"]:
+        info(
+            f"{report['unmatched_db']} database sequence(s) had no entry in the input file "
+            "— new columns will be NULL for these."
+        )
+
+    if report["skipped_cols"]:
+        warn(
+            f"Skipped {len(report['skipped_cols'])} column(s) already present "
+            "in the features table (existing values kept):"
+        )
+        for col in report["skipped_cols"]:
+            warn(f"    - {col}")
+
+    if report["injected_cols"]:
+        section(
+            f"Injected {len(report['injected_cols'])} new column(s) into the features table:"
+        )
+        for col in report["injected_cols"]:
+            info(f"    + {col}")
+    else:
+        warn("No new columns were injected (all columns already existed in the features table).")
+
+    print("-" * 70)
+
+
 @app.command("bin", rich_help_panel="Analysis")
 def run_binner(
     db_path: Path = typer.Option(..., "-d", "--db", help="Path to SQLite DB"),
@@ -430,25 +567,33 @@ def dr_cmd(
     """
     set_global_threads(threads)
     info(f"Using {threads} threads")
-    
-    from kmer_ord.workflow.operations import DimensionalityReduction
 
-    context = Context(input, output_dir, force=force)
+    from kmer_ord.workflow.context import MatrixContext
+    from kmer_ord.workflow.operations import MatrixPreprocessing, DimensionalityReduction
+
+    context = MatrixContext(input, output_dir, force=force)
 
     method_list = [m.strip().lower() for m in methods.split(",")]
     norm_list = [n.strip().lower() for n in normalisation.split(",")]
 
-    operation = DimensionalityReduction(
-        methods=method_list,
-        normalisations=norm_list,
-        dims=dims,
-        pca_dim_red=pca_pre,
-        keep_pcs=keep_pcs,
-        keep_variance=keep_variance,
-        screen_params=screen_params,
-        scale=scale)
+    operations = [
+        MatrixPreprocessing(
+            normalisations=norm_list,
+            pca_dim_red=pca_pre,
+            keep_pcs=keep_pcs,
+            keep_variance=keep_variance,
+            scale=scale,
+        ),
+        DimensionalityReduction(
+            methods=method_list,
+            dims=dims,
+            scale=scale,
+            screen_params=screen_params,
+        ),
+    ]
 
-    operation.run(context)
+    runner = Runner(operations)
+    runner.run(context)
 
     info(f"DR embeddings saved at: {context.get('dr_embeddings')}")
 

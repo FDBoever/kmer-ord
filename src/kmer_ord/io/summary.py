@@ -74,7 +74,8 @@ def calculate_stats(context: Context):
     df = pd.DataFrame(results_dict)
 
     total_seqs = len(sequences)
-    n50, n90 = calculate_nx(df["Length"])
+    n50, _ = calculate_nx(df["Length"], target_percentage=50)
+    n90, _ = calculate_nx(df["Length"], target_percentage=90)
     avg_gc = statistics.mean(gc_contents)
     std_gc = statistics.stdev(gc_contents) if len(gc_contents) > 1 else 0
 
