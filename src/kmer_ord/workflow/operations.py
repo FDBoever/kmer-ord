@@ -511,72 +511,63 @@ class Clustering(Operation):
 
             df = pd.read_csv(emb_path, sep="\t")
             sequence_ids = df["sequence_id"]
-            X = df.drop(columns=["sequence_id"]).values
+
+            # Detect each DR method and its dimensionality from column names.
+            # Columns follow the pattern {method}_{dim} e.g. umap_1, umap_2, tsne_1.
+            dr_methods = {}
+            for col in df.columns:
+                if col != "sequence_id" and col.endswith("_1"):
+                    base = col[:-2]
+                    n = 1
+                    while f"{base}_{n + 1}" in df.columns:
+                        n += 1
+                    dr_methods[base] = n
 
             cluster_df = pd.DataFrame({"sequence_id": sequence_ids})
 
-            # LEIDEN
-            if self.method == "leiden":
+            for dr_method, n_dims in dr_methods.items():
+                prefix = f"{dr_method}_{n_dims}"
+                X = df[[f"{dr_method}_{i + 1}" for i in range(n_dims)]].values
 
-                A = build_knn_graph(X, k=self.knn)
+                # LEIDEN
+                if self.method == "leiden":
+                    A = build_knn_graph(X, k=self.knn)
+                    if self.sweep:
+                        results = leiden_resolution_sweep(
+                            A,
+                            resolutions=self.LEIDEN_RESOLUTIONS,
+                            seed=self.seed
+                        )
+                        for r, (labels, modularity) in results.items():
+                            cluster_df[f"{prefix}_leiden_r{r:.4f}"] = labels
+                    else:
+                        labels, modularity = run_leiden(A, resolution=1.0, seed=self.seed)
+                        cluster_df[f"{prefix}_leiden"] = labels
 
-                if self.sweep:
-                    results = leiden_resolution_sweep(
-                        A,
-                        resolutions=self.LEIDEN_RESOLUTIONS,
-                        seed=self.seed
-                    )
-
-                    for r, (labels, modularity) in results.items():
-                        cluster_df[f"leiden_r{r:.4f}"] = labels
-                else:
-                    labels, modularity = run_leiden(
-                        A,
-                        resolution=1.0,
-                        seed=self.seed
-                    )
-                    cluster_df["leiden"] = labels
-
-            # HDBSCAN
-            elif self.method == "hdbscan":
-
-                if self.sweep:
-                    for mcs in self.HDBSCAN_MCS:
+                # HDBSCAN
+                elif self.method == "hdbscan":
+                    if self.sweep:
+                        for mcs in self.HDBSCAN_MCS:
+                            labels = run_hdbscan(X, min_cluster_size=mcs, min_samples=self.min_samples)
+                            cluster_df[f"{prefix}_hdbscan_mcs{mcs}"] = labels
+                    else:
                         labels = run_hdbscan(
-                            X,
-                            min_cluster_size=mcs,
-                            min_samples=self.min_samples
+                            X, min_cluster_size=self.min_cluster_size, min_samples=self.min_samples
                         )
-                        cluster_df[f"hdbscan_mcs{mcs}"] = labels
+                        cluster_df[f"{prefix}_hdbscan"] = labels
+
+                # DBSCAN
+                elif self.method == "dbscan":
+                    if self.sweep:
+                        for eps in self.DBSCAN_EPS:
+                            labels = run_dbscan(X, eps=eps, min_samples=self.min_samples)
+                            cluster_df[f"{prefix}_dbscan_eps{eps:.3f}"] = labels
+                    else:
+                        labels = run_dbscan(X, eps=self.eps, min_samples=self.min_samples)
+                        cluster_df[f"{prefix}_dbscan"] = labels
+
                 else:
-                    labels = run_hdbscan(
-                        X,
-                        min_cluster_size=self.min_cluster_size,
-                        min_samples=self.min_samples
-                    )
-                    cluster_df["hdbscan"] = labels
-
-            # DBSCAN
-            elif self.method == "dbscan":
-
-                if self.sweep:
-                    for eps in self.DBSCAN_EPS:
-                        labels = run_dbscan(
-                            X,
-                            eps=eps,
-                            min_samples=self.min_samples
-                        )
-                        cluster_df[f"dbscan_eps{eps:.3f}"] = labels
-                else:
-                    labels = run_dbscan(
-                        X,
-                        eps=self.eps,
-                        min_samples=self.min_samples
-                    )
-                    cluster_df["dbscan"] = labels
-
-            else:
-                raise ValueError(f"Unknown clustering method: {self.method}")
+                    raise ValueError(f"Unknown clustering method: {self.method}")
 
             output_file.parent.mkdir(parents=True, exist_ok=True)
             cluster_df.to_csv(output_file, sep="\t", index=False)

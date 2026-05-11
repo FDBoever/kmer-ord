@@ -268,8 +268,18 @@ def save_clustering_results(conn: sqlite3.Connection, cluster_files: list[Path],
     if "sequence_id" in merged_df.columns:
         merged_df = merged_df.loc[:, ~merged_df.columns.duplicated()]
 
-    table_name = "Clustering"
-    if force:
+    table_name = "clustering"
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?;", (table_name,))
+    exists = cursor.fetchone() is not None
+
+    if exists and not force:
+        print(f"Skipping clustering table '{table_name}', already exists. Use --force to overwrite.")
+        return table_name
+
+    if exists and force:
+        print(f"Overwriting existing clustering table '{table_name}'.")
         conn.execute(f"DROP TABLE IF EXISTS {table_name};")
 
     merged_df.to_sql(table_name, conn, index=False)
