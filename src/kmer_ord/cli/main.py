@@ -119,7 +119,8 @@ def run_pipeline(
             methods=method_list,
             dims=dims,
             scale=scale,
-            screen_params=screen_params,),
+            screen_params=screen_params,
+            threads=threads,),
         FeatureMerge(),
         SpatialiteDatabase()]
 
@@ -221,7 +222,8 @@ def discover_pipeline(
             methods=method_list,
             dims=dims,
             scale=scale,
-            screen_params=screen_params,)]
+            screen_params=screen_params,
+            threads=threads,)]
 
     # -----------------------------
     # Clustering operations
@@ -589,6 +591,7 @@ def dr_cmd(
             dims=dims,
             scale=scale,
             screen_params=screen_params,
+            threads=threads,
         ),
     ]
 

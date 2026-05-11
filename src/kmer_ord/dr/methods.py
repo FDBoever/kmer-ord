@@ -55,6 +55,7 @@ def _run_single_method(
     dims: int,
     seed: int,
     scale: str = "default",
+    n_jobs: int = 1,
 ):
     import pandas as pd
     import scipy.sparse as sparse
@@ -80,13 +81,13 @@ def _run_single_method(
 
     elif method == "tsne":
         from sklearn.manifold import TSNE
-        model = TSNE(n_components=dims, random_state=seed, **params)
+        model = TSNE(n_components=dims, random_state=seed, n_jobs=n_jobs, **params)
         embedding = model.fit_transform(X)
 
     elif method == "umap":
         import umap
         warn("UMAP random seed is disabled to allow parallel execution.")
-        model = umap.UMAP(n_components=dims, random_state=None, **params)
+        model = umap.UMAP(n_components=dims, random_state=None, n_jobs=n_jobs, **params)
         embedding = model.fit_transform(X)
         graph = getattr(model, "graph_", None)
 
@@ -112,18 +113,19 @@ def _run_single_method(
         n_neighbors = params.get("n_neighbors", 10)
         model = LocallyLinearEmbedding(
             n_neighbors=n_neighbors,
-            n_components=dims
+            n_components=dims,
+            n_jobs=n_jobs,
         )
         embedding = model.fit_transform(X)
 
     elif method == "sparse_pca":
         from sklearn.decomposition import SparsePCA
-        model = SparsePCA(n_components=dims, random_state=seed, **params)
+        model = SparsePCA(n_components=dims, random_state=seed, n_jobs=n_jobs, **params)
         embedding = model.fit_transform(X)
 
     elif method == "kernel_pca":
         from sklearn.decomposition import KernelPCA
-        model = KernelPCA(n_components=dims, **params)
+        model = KernelPCA(n_components=dims, n_jobs=n_jobs, **params)
         embedding = model.fit_transform(X)
 
     else:
@@ -147,6 +149,7 @@ def run_dr_methods(
     normalisation: str,
     input_name: str,
     sequence_ids: list | pd.Index | None = None,
+    n_jobs: int = 1,
 ) -> tuple[Path, list[Path]]:
     """
     Run selected DR methods for a single normalisation.
@@ -208,6 +211,7 @@ def run_dr_methods(
                 normalisation=normalisation,
                 input_name=input_name,
                 sequence_ids=sequence_ids,
+                n_jobs=n_jobs,
             )
 
         # -------------------------
@@ -219,6 +223,7 @@ def run_dr_methods(
             dims=dims,
             seed=seed,
             scale=scale,
+            n_jobs=n_jobs,
         )
 
         # save embedding
@@ -263,7 +268,8 @@ def _run_parameter_screen(
     output_dir: Path,
     normalisation: str,
     input_name: str,
-    sequence_ids: list | pd.Index
+    sequence_ids: list | pd.Index,
+    n_jobs: int = 1,
 ) -> list[Path]:
     """
     Perform parameter screening for a given DR method.
@@ -302,7 +308,7 @@ def _run_parameter_screen(
         for n in n_neighbors_values:
             for m in min_dist_values:
                 print(f"     ... UMAP with n_neighbors={n}, min_dist={m}", flush=True)
-                model = umap.UMAP(n_components=dims, n_neighbors=n, min_dist=m)
+                model = umap.UMAP(n_components=dims, n_neighbors=n, min_dist=m, n_jobs=n_jobs)
                 embedding = model.fit_transform(X)
                 save_embedding(embedding, param_str=f"n{n}_min{m}")
 
@@ -313,7 +319,7 @@ def _run_parameter_screen(
             for lr in learning_rate_values:
                 print(f"     ... t-SNE with perplexity={p}, learning_rate={lr}", flush=True)
                 model = TSNE(n_components=dims, perplexity=p, learning_rate=lr,
-                             max_iter=1000, random_state=seed)
+                             max_iter=1000, random_state=seed, n_jobs=n_jobs)
                 embedding = model.fit_transform(X)
                 save_embedding(embedding, param_str=f"p{p}_lr{lr}")
 

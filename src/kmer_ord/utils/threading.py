@@ -1,18 +1,17 @@
 def set_global_threads(threads: int):
     import os
-    import numba
 
-    vars = [
+    # Set env vars BEFORE importing numba so it initialises its thread pool
+    # at the correct count rather than defaulting to cpu_count().
+    for v in [
         "OMP_NUM_THREADS",
         "OPENBLAS_NUM_THREADS",
         "MKL_NUM_THREADS",
         "NUMEXPR_NUM_THREADS",
         "VECLIB_MAXIMUM_THREADS",
         "NUMBA_NUM_THREADS",
-    ]
-
-    for v in vars:
+    ]:
         os.environ[v] = str(threads)
 
-    #additionally set numba threads through numba api
+    import numba
     numba.set_num_threads(threads)

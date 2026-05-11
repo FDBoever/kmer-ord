@@ -178,6 +178,7 @@ class DimensionalityReduction(Operation):
         seed=42,
         screen_params=False,
         max_memory_gb=None,
+        threads=1,
     ):
         self.methods = methods
         self.dims = dims
@@ -185,6 +186,7 @@ class DimensionalityReduction(Operation):
         self.seed = seed
         self.screen_params = screen_params
         self.max_memory_gb = max_memory_gb
+        self.threads = threads
 
     def run(self, context):
         import numpy as np
@@ -248,6 +250,7 @@ class DimensionalityReduction(Operation):
                 normalisation=norm_label,
                 input_name=input_name,
                 sequence_ids=sequence_ids,
+                n_jobs=self.threads,
             )
 
             merged_outputs.append(merged_file)
