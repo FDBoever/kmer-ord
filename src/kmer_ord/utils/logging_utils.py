@@ -1,15 +1,13 @@
-import datetime
+from rich.console import Console
 
-def _timestamp():
-    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+console = Console(highlight=False)
 
-def section(title):
-    #print("\n" + "-" * 70)
-    print(f"[{_timestamp()}] {title}")
-    #print("-" * 70)
+def section(title: str) -> None:
+    console.print()
+    console.rule(title, align="left", style="Dim")
 
-def info(message):
-    print(f"    ... {message}")
+def info(message: str) -> None:
+    console.print(f"    {message}", markup=False, highlight=False)
 
-def warn(message):
-    print(f"   WARNING: {message}")
+def warn(message: str) -> None:
+    console.print(f"    WARNING  {message}", style="Dim", markup=False, highlight=False)

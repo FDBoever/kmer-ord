@@ -2,7 +2,7 @@
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from kmer_ord.utils.logging_utils import section, info, warn
+from kmer_ord.utils.logging_utils import section, info, warn, console
 #from umap import UMAP
 
 # methods supporting parameter screening
@@ -234,7 +234,7 @@ def run_dr_methods(
         out_file = (method_dir / f"{input_name}_{normalisation}_{method}_{dims}D.tsv")
 
         df_embed.to_csv(out_file, sep="\t", index=False)
-        print(f"Saved {method} ({normalisation}) > {out_file}")
+        info(f"saved  {normalisation}/{method}  {out_file}")
 
         dfs.append(df_embed)
 
@@ -254,7 +254,7 @@ def run_dr_methods(
     merged_file = (output_dir / normalisation /f"{input_name}_{normalisation}_{dims}D_merged_embeddings.tsv")
 
     merged_df.to_csv(merged_file, sep="\t", index=False)
-    print(f"Saved merged embeddings ({normalisation}) > {merged_file}")
+    info(f"merged  {normalisation}  {merged_file}")
 
     return merged_file, graph_paths
 
@@ -307,7 +307,7 @@ def _run_parameter_screen(
         min_dist_values = [0, 0.1, 0.25, 0.5, 1.0]
         for n in n_neighbors_values:
             for m in min_dist_values:
-                print(f"     ... UMAP with n_neighbors={n}, min_dist={m}", flush=True)
+                info(f"UMAP  n_neighbors={n}  min_dist={m}")
                 model = umap.UMAP(n_components=dims, n_neighbors=n, min_dist=m, n_jobs=n_jobs)
                 embedding = model.fit_transform(X)
                 save_embedding(embedding, param_str=f"n{n}_min{m}")
@@ -317,7 +317,7 @@ def _run_parameter_screen(
         learning_rate_values = [10, 100, 200, 500]
         for p in perplexity_values:
             for lr in learning_rate_values:
-                print(f"     ... t-SNE with perplexity={p}, learning_rate={lr}", flush=True)
+                info(f"t-SNE  perplexity={p}  learning_rate={lr}")
                 model = TSNE(n_components=dims, perplexity=p, learning_rate=lr,
                              max_iter=1000, random_state=seed, n_jobs=n_jobs)
                 embedding = model.fit_transform(X)
@@ -328,7 +328,7 @@ def _run_parameter_screen(
         weight_temp_values = [0.1, 0.5, 1.0, 2.0, 2.5]
         for n in n_inliers_values:
             for w in weight_temp_values:
-                print(f"     ... TRIMAP with n_inliers={n}, weight_temp={w}", flush=True)
+                info(f"TRIMAP  n_inliers={n}  weight_temp={w}")
                 model = TRIMAP(n_dims=dims, n_inliers=n, weight_temp=w)
                 embedding = model.fit_transform(X)
                 save_embedding(embedding, param_str=f"inliers{n}_weighttemp{w}")
@@ -338,7 +338,7 @@ def _run_parameter_screen(
         FP_ratio_values = [0.1, 0.5, 1.0, 2.0, 5]
         for n in n_neighbors_values:
             for fp in FP_ratio_values:
-                print(f"     ... PaCMAP with n_neighbors={n}, FP_ratio={fp}", flush=True)
+                info(f"PaCMAP  n_neighbors={n}  FP_ratio={fp}")
                 model = PaCMAP(n_components=dims, n_neighbors=n, FP_ratio=fp)
                 embedding = model.fit_transform(X)
                 save_embedding(embedding, param_str=f"n{n}_FPratio{fp}")
@@ -348,7 +348,7 @@ def _run_parameter_screen(
         FP_ratio_values = [0.1, 0.5, 1.0, 2.0, 5]
         for n in n_neighbors_values:
             for fp in FP_ratio_values:
-                print(f"     ... LocalMAP with n_neighbors={n}, FP_ratio={fp}", flush=True)
+                info(f"LocalMAP  n_neighbors={n}  FP_ratio={fp}")
                 model = LocalMAP(n_components=dims, n_neighbors=n, FP_ratio=fp)
                 embedding = model.fit_transform(X)
                 save_embedding(embedding, param_str=f"n{n}_FPratio{fp}")

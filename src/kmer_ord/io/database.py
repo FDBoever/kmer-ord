@@ -2,6 +2,7 @@ from os import name
 from pathlib import Path
 import pandas as pd
 import sqlite3
+from kmer_ord.utils.logging_utils import info, console
 
 # ---------------------------------------------------------
 def initialize_spatialite_db(db_file: Path):
@@ -242,11 +243,11 @@ def save_dr_embeddings(conn, df: pd.DataFrame, method_name: str, force: bool = F
     exists = cursor.fetchone() is not None
 
     if exists and not force:
-        print(f"Skipping DR embeddings for '{method_name}', table already exists: {table_name}")
+        info(f"Skipping DR embeddings for '{method_name}', table already exists")
         return table_name
 
     if exists and force:
-        print(f"Overwriting existing embeddings table '{table_name}'")
+        info(f"Overwriting existing embeddings table '{table_name}'")
         conn.execute(f"DROP TABLE IF EXISTS {table_name};")
 
     df.to_sql(table_name, conn, index=False)
@@ -268,6 +269,9 @@ def save_clustering_results(conn: sqlite3.Connection, cluster_files: list[Path],
     if "sequence_id" in merged_df.columns:
         merged_df = merged_df.loc[:, ~merged_df.columns.duplicated()]
 
+    # Ensure sequence_id is stored as TEXT so it matches the coordinates table
+    merged_df["sequence_id"] = merged_df["sequence_id"].astype(str)
+
     table_name = "clustering"
 
     cursor = conn.cursor()
@@ -275,11 +279,11 @@ def save_clustering_results(conn: sqlite3.Connection, cluster_files: list[Path],
     exists = cursor.fetchone() is not None
 
     if exists and not force:
-        print(f"Skipping clustering table '{table_name}', already exists. Use --force to overwrite.")
+        info(f"Skipping clustering table, already exists (use --force to overwrite)")
         return table_name
 
     if exists and force:
-        print(f"Overwriting existing clustering table '{table_name}'.")
+        info(f"Overwriting existing clustering table")
         conn.execute(f"DROP TABLE IF EXISTS {table_name};")
 
     merged_df.to_sql(table_name, conn, index=False)
@@ -455,7 +459,7 @@ def inspect_database(db_file: Path, limit: int = 5):
     tables = [row[0] for row in cursor.fetchall()]
 
     if not tables:
-        print("No tables found in database.")
+        info("No tables found in database.")
         conn.close()
         return
     
@@ -479,45 +483,50 @@ def inspect_database(db_file: Path, limit: int = 5):
               if not t.startswith(SYSTEM_PREFIXES)
               and t not in SYSTEM_TABLES]
 
-    for table in tables:
-        print(f"\n--- TABLE: {table} ---")
+    from rich.table import Table
+    from rich import box as rich_box
 
+    for table in tables:
         cursor.execute(f"PRAGMA table_info({table});")
         schema = cursor.fetchall()
 
+        console.print()
+        console.rule(table, style="dim")
+
         if not schema:
-            print("Table not found or empty.")
+            info("Table not found or empty.")
             continue
 
         try:
-            # Special handling for coordinates (geometry columns)
             if table == "coordinates":
                 geom_query = """SELECT f_geometry_column FROM geometry_columns WHERE f_table_name = 'coordinates';"""
                 geom_cols = pd.read_sql_query(geom_query, conn)
 
                 if geom_cols.empty:
                     df = pd.read_sql_query(f"SELECT * FROM coordinates LIMIT {limit};", conn)
-                    print(df)
-                    continue
-
-                geom_names = geom_cols["f_geometry_column"].tolist()
-                select_parts = ["CAST(sequence_id AS TEXT) AS sequence_id"]
-                for col in geom_names:
-                    select_parts.append(f"ST_X({col}) AS {col}_1")
-                    select_parts.append(f"ST_Y({col}) AS {col}_2")
-                    select_parts.append(f"ST_Z({col}) AS {col}_3")
-
-                select_sql = f"""SELECT {', '.join(select_parts)} FROM coordinates LIMIT {limit};"""
-                df = pd.read_sql_query(select_sql, conn)
-                df = df.dropna(axis=1, how="all")
-                print(df)
-
+                else:
+                    geom_names = geom_cols["f_geometry_column"].tolist()
+                    select_parts = ["CAST(sequence_id AS TEXT) AS sequence_id"]
+                    for col in geom_names:
+                        select_parts.append(f"ST_X({col}) AS {col}_1")
+                        select_parts.append(f"ST_Y({col}) AS {col}_2")
+                        select_parts.append(f"ST_Z({col}) AS {col}_3")
+                    select_sql = f"SELECT {', '.join(select_parts)} FROM coordinates LIMIT {limit};"
+                    df = pd.read_sql_query(select_sql, conn)
+                    df = df.dropna(axis=1, how="all")
             else:
-                # Generic table, just read first rows
                 df = pd.read_sql_query(f"SELECT * FROM {table} LIMIT {limit};", conn)
-                print(df)
+
+            rich_tbl = Table(box=rich_box.SIMPLE, show_header=True,
+                             header_style="dim", style="dim",
+                             show_edge=False, pad_edge=True)
+            for col in df.columns:
+                rich_tbl.add_column(col, no_wrap=False, max_width=40)
+            for _, row in df.iterrows():
+                rich_tbl.add_row(*[str(v) if v is not None else "" for v in row])
+            console.print(rich_tbl)
 
         except Exception as e:
-            print(f"Error reading table {table}: {e}")
+            info(f"Error reading table {table}: {e}")
 
     conn.close()

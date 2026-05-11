@@ -6,7 +6,7 @@ import datetime
 
 from kmer_ord.workflow.context import Context
 from kmer_ord.workflow.runner import Runner
-from kmer_ord.utils.logging_utils import section, info, warn
+from kmer_ord.utils.logging_utils import section, info, warn, console
 from kmer_ord.cli.setup import setup_app
 from kmer_ord.utils.threading import set_global_threads
 
@@ -21,18 +21,88 @@ app.add_typer(setup_app)
 
 def print_header(start_time):
     from importlib.metadata import version
-    width = 70
     v = version("kmer-ord")
+    console.print()
+    console.rule(style='none')
+    console.print(f"  kmer-ord  v{v}", style="bold", highlight=False)
+    console.print("  Pipeline for projecting kmer profiles in lower dimensional space",highlight=False)
+    console.rule(style='none')
+    console.print(
+        f"  Started  {start_time.isoformat(timespec='seconds')}    "
+        f"Python {platform.python_version()}",
+        style="dim", highlight=False,
+    )
+    console.print()
 
-    print()
-    print("=" * width)
-    print("kmer-ord".center(width))
-    print(f"version {v}".center(width))
-    print("Pipeline for projecting kmer profiles in lower dimensional space".center(width))
-    print("=" * width)
-    print(f"Run started: {start_time.isoformat(timespec='seconds')}")
-    print(f"Python: {platform.python_version()}")
-    print("=" * width)
+
+def _print_artifacts(context):
+    base = context.output_dir.parent
+
+    def rel(p):
+        try:
+            return Path(p).relative_to(base)
+        except ValueError:
+            return Path(p)
+
+    console.rule("output", style="none")
+
+    for name, path in context.artifacts.items():
+
+        # -------------------------
+        # list artifacts
+        # -------------------------
+        if isinstance(path, list):
+
+            # single item -> inline
+            if len(path) == 1:
+                console.print(
+                    f"  {name:<28}  {rel(path[0])}",
+                    style="none",
+                    markup=False,
+                    highlight=False,)
+
+            # multiple items -> multiline
+            else:
+                console.print(
+                    f"  {name}",
+                    style="none",
+                    markup=False,
+                    highlight=False,)
+
+                for p in path:
+                    console.print(
+                        f"      {rel(p)}",
+                        style="none",
+                        markup=False,
+                        highlight=False,)
+
+ 
+        # scalar artifacts
+        # -------------------------
+        else:
+            console.print(
+                f"  {name:<28}  {rel(path)}",
+                style="none",
+                markup=False,
+                highlight=False,
+            )
+
+    console.rule(style="none")
+
+
+def _print_footer(start_time):
+    end_time = datetime.datetime.now()
+    duration = end_time - start_time
+    total = duration.total_seconds()
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    runtime = f"{int(h):02d}:{int(m):02d}:{int(s):02d}"
+    console.print(
+        f"  Finished  {end_time.isoformat(timespec='seconds')}    Runtime  {runtime}",
+        style="none", highlight=False,
+    )
+    console.print()
+
 
 def format_timedelta(td: "datetime.timedelta") -> str:
     total_seconds = td.total_seconds()
@@ -84,13 +154,12 @@ def run_pipeline(
 
     info("loading packages")
 
-    from kmer_ord.io.sequence import fastq_to_fasta
     from kmer_ord.io.summary import calculate_stats
     from kmer_ord.workflow.operations import (
         FastqToFasta, FastaStats, KmerCount, KmerMetrics, Tiara, MatrixPreprocessing,
         DimensionalityReduction, FeatureMerge, SpatialiteDatabase)
 
-    context = Context(input, output_dir, force=force)
+    context = Context(input, output_dir, force=force, threads=threads)
 
     method_list = [m.strip().lower() for m in dr_methods.split(",")]
     norm_list = [n.strip().lower() for n in normalisation.split(",")]
@@ -127,27 +196,10 @@ def run_pipeline(
     runner = Runner(operations)
     runner.run(context)
 
-    # print all artifacts 
-    print("\n")
-    print("-" * 70)
-    typer.echo("Generated output:")
-    for name, path in context.artifacts.items():
-        if isinstance(path, list):
-            typer.echo(f"  {name}:")
-            for p in path:
-                typer.echo(f"    - {p}")
-        else:
-            typer.echo(f"  {name}: {path}")
-    
-    end_time = datetime.datetime.now()
-    duration = end_time - start_time
+    _print_artifacts(context)
+    _print_footer(start_time)
 
-    print("-" * 70)
-    print(f"Finished: {end_time.isoformat(timespec='seconds')}")
-    print(f"Total runtime: {format_timedelta(duration)}")
-    print("-" * 70)
 
- 
 @app.command("cluster", rich_help_panel="Pipeline")
 def discover_pipeline(
     input: Path = typer.Option(..., "-i", "--input", help="Input fasta/fastq file"),
@@ -198,7 +250,7 @@ def discover_pipeline(
         Clustering,
         AddClusteringToDB)
 
-    context = Context(input, output_dir, force=force)
+    context = Context(input, output_dir, force=force, threads=threads)
 
     cluster_list = [c.strip().lower() for c in cluster_methods.split(",")]
     norm_list = [n.strip().lower() for n in normalisation.split(",")]
@@ -248,27 +300,10 @@ def discover_pipeline(
     add_db_op = AddClusteringToDB(db_path=db_path, force=force)
     add_db_op.run(context)
 
-    section(f"Discovery complete. Database saved at: {db_path}")
+    info(f"Database saved at: {db_path}")
 
-    # print all artifacts 
-    print("\n")
-    print("-" * 70)
-    typer.echo("Generated output:")
-    for name, path in context.artifacts.items():
-        if isinstance(path, list):
-            typer.echo(f"  {name}:")
-            for p in path:
-                typer.echo(f"    - {p}")
-        else:
-            typer.echo(f"  {name}: {path}")
-    
-    end_time = datetime.datetime.now()
-    duration = end_time - start_time
-
-    print("-" * 70)
-    print(f"Finished: {end_time.isoformat(timespec='seconds')}")
-    print(f"Total runtime: {format_timedelta(duration)}")
-    print("-" * 70)
+    _print_artifacts(context)
+    _print_footer(start_time)
 
 
 @app.command("visualise", rich_help_panel="Analysis")
@@ -284,9 +319,8 @@ def visualise_db(
     - Embedding visualisations (UMAP, t-SNE, etc.)
     """
     start_time = datetime.datetime.now()
-    print_header(start_time) 
+    print_header(start_time)
 
-    print("-" * 70)
     section("Starting kmer-ord visualisation...")
     #set_global_threads(threads)
     #info(f"Using {threads} threads")
@@ -308,13 +342,7 @@ def visualise_db(
         plot_embeddings.run(ctx)
 
     info(f"All plots saved to: {ctx.output_dir / 'plots'}")
-    end_time = datetime.datetime.now()
-    duration = end_time - start_time
-
-    print("-" * 70)
-    print(f"Finished: {end_time.isoformat(timespec='seconds')}")
-    print(f"Total runtime: {format_timedelta(duration)}")
-    print("-" * 70)
+    _print_footer(start_time)
 
 
 @app.command("inject", rich_help_panel="Analysis")
@@ -337,7 +365,6 @@ def inject_features_cmd(
     import pandas as pd
     from kmer_ord.io.database import inject_features
 
-    print("-" * 70)
     section("Starting feature injection...")
 
     # ------------------------------------------------------------------
@@ -408,7 +435,6 @@ def inject_features_cmd(
     # ------------------------------------------------------------------
     # Report
     # ------------------------------------------------------------------
-    print("-" * 70)
     info(
         f"Sequence ID coverage: {report['matched']} / {report['total_db']} "
         "database sequences matched."
@@ -439,11 +465,9 @@ def inject_features_cmd(
             f"Injected {len(report['injected_cols'])} new column(s) into the features table:"
         )
         for col in report["injected_cols"]:
-            info(f"    + {col}")
+            info(f"  {col}")
     else:
         warn("No new columns were injected (all columns already existed in the features table).")
-
-    print("-" * 70)
 
 
 @app.command("bin", rich_help_panel="Analysis")
@@ -472,17 +496,22 @@ def run_binner(
 def fastq_to_fasta_cmd(
     input: Path = typer.Option(..., "-i","--input", help="Input fastq file (can be gzipped)"),
     output: Path = typer.Option(..., "-o","--output", help="Output fasta file"),
+    threads: int = typer.Option(1, "-t", "--threads", help="Threads for seqkit"),
+    biopython: bool = typer.Option(False, "--biopython", help="Use BioPython instead of seqkit (legacy)"),
     force: bool = typer.Option(False, "-f","--force", help="Overwrite output if it exists")):
     """
-    Convert fastq (or fastq.gz) to fasta.
+    Convert fastq (or fastq.gz) to fasta. Uses seqkit by default; --biopython for legacy fallback.
     """
-    from kmer_ord.workflow.operations import FastqToFasta
-    from kmer_ord.io.sequence import fastq_to_fasta
     if output.exists() and not force:
         info(f"Skipping conversion, FASTA already exists: {output}")
-    else:
+        return
+    if biopython:
+        from kmer_ord.io.sequence import fastq_to_fasta
         fastq_to_fasta(input, output)
-        info(f"fastq -> fasta conversion done: {output}")
+    else:
+        from kmer_ord.io.sequence import fastq_to_fasta_seqkit
+        fastq_to_fasta_seqkit(input, output, threads=threads)
+    info(f"fastq -> fasta conversion done: {output}")
 
 
 # -----------------------------
@@ -515,7 +544,7 @@ def kmer_count_cmd(
     """
     Count k-mers for a fasta file and save tsv matrix.
     """
-    context = Context(input, output_dir, force=force)
+    context = Context(input, output_dir, force=force, threads=threads)
     from kmer_ord.workflow.operations import KmerCount
 
     operation = KmerCount(kmer_length=kmer_length, threads=threads)
@@ -635,7 +664,7 @@ def run_tiara_cmd(
     """
     from kmer_ord.workflow.operations import Tiara
 
-    context = Context(input, output_dir, force=force)
+    context = Context(input, output_dir, force=force, threads=threads)
 
     operation = Tiara(threads=threads)
     operation.run(context)

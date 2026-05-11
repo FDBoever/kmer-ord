@@ -22,18 +22,21 @@ class Context:
         "figures": "figures"
     }
 
-    def __init__(self, input_file: Path, output_dir: Path, force: bool = False):
+    def __init__(self, input_file: Path, output_dir: Path, force: bool = False, threads: int = 1):
         from kmer_ord.io.sequence import load_fasta_or_convert
         self.input_file: Path = Path(input_file)
         self.output_dir: Path = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self.force: bool = force  # force recalculation even if files exist
+        self.threads: int = threads
         self.artifacts: Dict[str, Path] = {}
         self.logger = logging.getLogger("kmer-ord")
 
         # Automatically create canonical FASTA
-        self.fasta: Path = load_fasta_or_convert(self.input_file, self.output_dir)
+        self.fasta: Path = load_fasta_or_convert(
+            self.input_file, self.output_dir, force=self.force, threads=self.threads
+        )
         self.register("fasta", self.fasta)
 
     # -------------------------
