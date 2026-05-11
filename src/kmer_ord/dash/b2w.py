@@ -180,20 +180,20 @@ def load_coordinates_from_db(db_path,
 
         for c in feature_col_set:
             select.append(f'f."{c}" AS "{c}"')
-        for c in cluster_col_set:
-            select.append(f'cl."{c}" AS "{c}"')
+        # Cluster columns are NOT fetched via SQL JOIN — they are merged in Python
+        # after the main query to avoid SQLite type-affinity mismatches on sequence_id.
 
         query = f"""SELECT {', '.join(select)}
         FROM coordinates AS c
         JOIN features AS f ON c.sequence_id = f.sequence_id
         """
-        if cluster_col_set:
-            query += " LEFT JOIN clustering cl ON c.sequence_id = cl.sequence_id"
 
         conds = []
         params = []
         if filter_values:
             for col, b in filter_values.items():
+                if col in cluster_col_set:
+                    continue  # cluster columns not filterable via SQL
 
                 if b.get("min") is not None:
                     conds.append(f"f.{col} >= ?")
@@ -216,6 +216,25 @@ def load_coordinates_from_db(db_path,
         for cs in coordinate_systems:
             df[f"x_{cs}"] = df[f"x_{cs}"].astype("float32")
             df[f"y_{cs}"] = df[f"y_{cs}"].astype("float32")
+
+        # Merge cluster columns via Python — both sides cast to str to avoid
+        # INTEGER vs TEXT mismatches that silently break SQL JOINs.
+        if cluster_col_set:
+            col_select = ", ".join(
+                ['"sequence_id"'] + [f'"{c}"' for c in sorted(cluster_col_set)]
+            )
+            cluster_df = pd.read_sql_query(
+                f"SELECT {col_select} FROM clustering", conn
+            )
+            cluster_df["sequence_id"] = cluster_df["sequence_id"].astype(str)
+            df = df.merge(
+                cluster_df,
+                left_on="header",
+                right_on="sequence_id",
+                how="left",
+            )
+            df = df.drop(columns=["sequence_id"])
+
     finally:
         conn.close()
     return df
