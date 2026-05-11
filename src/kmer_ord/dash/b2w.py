@@ -75,6 +75,8 @@ def print_banner(host="127.0.0.1", port=8050):
 #nr_ordinations = None
 #count_badges = None
 
+CLUSTER_COLS = []   # column names from the clustering table (populated at init)
+
 ##############################
 # UTILS
 ##############################
@@ -121,6 +123,21 @@ def parse_feature_types(db_path):
     return feature_info
 
 
+def get_cluster_columns(db_path):
+    """Return column names from the clustering table, or [] if it doesn't exist."""
+    conn = get_connection(db_path)
+    try:
+        exists = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='clustering';"
+        ).fetchone()
+        if not exists:
+            return []
+        rows = conn.execute("PRAGMA table_info(clustering);").fetchall()
+        return [r["name"] for r in rows if r["name"] != "sequence_id"]
+    finally:
+        conn.close()
+
+
 def get_available_coordinate_systems(db_path):
     conn = get_connection(db_path)
     try:
@@ -158,14 +175,20 @@ def load_coordinates_from_db(db_path,
             select.append(f"ST_X(c.{cs}) AS x_{cs}")
             select.append(f"ST_Y(c.{cs}) AS y_{cs}")
 
-        for c in cols:
-            select.append(f"f.{c} AS {c}")
+        cluster_col_set = set(CLUSTER_COLS) & cols
+        feature_col_set = cols - cluster_col_set
+
+        for c in feature_col_set:
+            select.append(f'f."{c}" AS "{c}"')
+        for c in cluster_col_set:
+            select.append(f'cl."{c}" AS "{c}"')
 
         query = f"""SELECT {', '.join(select)}
         FROM coordinates AS c
-        JOIN features AS f
-        ON c.sequence_id = f.sequence_id
+        JOIN features AS f ON c.sequence_id = f.sequence_id
         """
+        if cluster_col_set:
+            query += " LEFT JOIN clustering cl ON c.sequence_id = cl.sequence_id"
 
         conds = []
         params = []
@@ -283,19 +306,65 @@ def get_number_of_ordinations(db_path):
     return len(get_available_coordinate_systems(db_path))
 
 #---- plotting utils ----
+_CLUSTER_NOISE_COLOR = "#555555"
+_CLUSTER_CATEGORICAL_THRESHOLD = 20
+
+
+def _cluster_color_key(categories):
+    """
+    Build a datashader color_key for integer cluster label columns.
+
+    - label -1 (noise/unassigned) → fixed grey
+    - ≤20 non-noise labels → glasbey qualitative palette
+    - >20 non-noise labels → Turbo sequential colormap for max perceptual separation
+
+    Returns (color_key_dict, n_clusters, mode)
+    where mode is "categorical" or "turbo".
+    """
+    regular = sorted(c for c in categories if c != -1)
+    n = len(regular)
+
+    if n <= _CLUSTER_CATEGORICAL_THRESHOLD:
+        colors = glasbey[:n]
+        mode = "categorical"
+    else:
+        turbo = cm.get_cmap("turbo")
+        colors = [
+            matplotlib.colors.rgb2hex(turbo(i / max(n - 1, 1)))
+            for i in range(n)
+        ]
+        mode = "turbo"
+
+    key = dict(zip(regular, colors))
+    if -1 in categories:
+        key[-1] = _CLUSTER_NOISE_COLOR
+    return key, n, mode
+
+
 def create_datashader_image(df, x_col, y_col,
                             color_col=None, color_palette="viridis",
                             px_spread=3,
-                            plot_width=1500, plot_height=1500):
+                            plot_width=1500, plot_height=1500,
+                            cluster_cols=None):
     df_ds = pd.DataFrame({
         'x': df[x_col].to_numpy(dtype='float32'),
         'y': df[y_col].to_numpy(dtype='float32')
     })
-    
+
     cvs = ds.Canvas(plot_width=plot_width, plot_height=plot_height)
-    
+
     if color_col is not None and color_col in df:
-        if pd.api.types.is_numeric_dtype(df[color_col]):
+        is_cluster = bool(cluster_cols and color_col in cluster_cols)
+
+        if is_cluster:
+            labels = df[color_col].fillna(-1).astype(int)
+            cat = pd.Categorical(labels)
+            df_ds['cat_value'] = cat
+            key, _n, _mode = _cluster_color_key(list(cat.categories))
+            agg = cvs.points(df_ds, x='x', y='y', agg=ds.count_cat('cat_value'))
+            img = tf.shade(agg, color_key=key, how='eq_hist')
+
+        elif pd.api.types.is_numeric_dtype(df[color_col]):
             df_ds['val'] = df[color_col].to_numpy(dtype='float32')
             agg = cvs.points(df_ds, x='x', y='y', agg=ds.mean('val'))
             
@@ -354,6 +423,60 @@ def create_panel_legend(df, feature_name, continuous_palette, categorical_palett
             ),
             "continuous"
         )
+
+    # Cluster column → adaptive legend
+    if feature_name in CLUSTER_COLS:
+        labels = df[feature_name].fillna(-1).astype(int)
+        categories = sorted(labels.unique().tolist())
+        key, n_clusters, mode = _cluster_color_key(categories)
+        noise_present = -1 in categories
+
+        if mode == "categorical":
+            items = []
+            for cat_val in categories:
+                color = key[cat_val]
+                label = "noise" if cat_val == -1 else str(cat_val)
+                items.append(
+                    html.Div([
+                        html.Span(style={
+                            "display": "inline-block", "width": "10px", "height": "10px",
+                            "marginRight": "5px", "backgroundColor": color,
+                            "border": "1px solid #444", "verticalAlign": "middle",
+                        }),
+                        html.Span(label, style={"verticalAlign": "middle", "fontSize": "0.72rem"})
+                    ], style={"display": "inline-block", "marginRight": "10px", "marginBottom": "3px"})
+                )
+            noise_note = " (grey = noise)" if noise_present else ""
+            items.insert(0, html.Div(
+                f"{feature_name} — {n_clusters} clusters{noise_note}",
+                style={"color": "#aaa", "fontSize": "0.7rem", "marginBottom": "4px", "width": "100%"}
+            ))
+            return (
+                html.Div(items, style={"color": "white", "textAlign": "center",
+                                       "fontSize": "0.75rem"}),
+                "categorical"
+            )
+        else:
+            noise_note = "  ·  grey = noise/unassigned" if noise_present else ""
+            return (
+                html.Div([
+                    html.Div(
+                        f"{feature_name} — {n_clusters} clusters (Turbo scale){noise_note}",
+                        style={"color": "#aaa", "fontSize": "0.7rem", "marginBottom": "4px"}
+                    ),
+                    html.Div(style={
+                        "height": "10px", "width": "160px", "margin": "0 auto",
+                        "background": "linear-gradient(to right, #30123b, #4777ef, #1ac7c2, "
+                                      "#a8fc3d, #fb8022, #7a0403)",
+                        "borderRadius": "3px",
+                    }),
+                    html.Div(
+                        f"0 → {n_clusters - 1}",
+                        style={"color": "#666", "fontSize": "0.65rem", "marginTop": "2px"}
+                    ),
+                ], style={"color": "white", "textAlign": "center", "fontSize": "0.75rem"}),
+                "categorical"
+            )
 
     # Continuous feature -> small horizontal colorbar
     if pd.api.types.is_numeric_dtype(df[feature_name]):
@@ -792,10 +915,13 @@ def build_dynamic_sidebar(feature_info):
             dbc.Label("Color By", className="small mt-3"),
             dcc.Dropdown(
                 id="color-feature-dropdown",
-                options=[
-                    {"label": f['column_name'], "value": f['column_name']}
-                    for f in feature_info
-                ],
+                options=(
+                    [{"label": f['column_name'], "value": f['column_name']}
+                     for f in feature_info]
+                    + ([{"label": "── Clustering ──", "value": "__cluster_sep__", "disabled": True}]
+                       + [{"label": c, "value": c} for c in CLUSTER_COLS]
+                       if CLUSTER_COLS else [])
+                ),
                 placeholder="Select feature",
                 searchable=False,
             ),
@@ -806,10 +932,13 @@ def build_dynamic_sidebar(feature_info):
             dbc.Label("Features to Compare", className="small mt-3"),
             dcc.Dropdown(
                 id="feature-comparison-dropdown",
-                options=[
-                    {"label": f['column_name'], "value": f['column_name']}
-                    for f in feature_info
-                ],
+                options=(
+                    [{"label": f['column_name'], "value": f['column_name']}
+                     for f in feature_info]
+                    + ([{"label": "── Clustering ──", "value": "__cluster_sep__", "disabled": True}]
+                       + [{"label": c, "value": c} for c in CLUSTER_COLS]
+                       if CLUSTER_COLS else [])
+                ),
                 multi=True,
                 placeholder="Select features",
                 searchable=False,
@@ -951,9 +1080,10 @@ external_stylesheets = [
 app = dash.Dash(__name__, external_stylesheets=external_stylesheets)
 
 def initialise_app_state():
-    global feature_info, sidebar, nr_reads, nr_ordinations, count_badges
+    global feature_info, sidebar, nr_reads, nr_ordinations, count_badges, CLUSTER_COLS
 
     feature_info = parse_feature_types(GLOBAL_DB_PATH)
+    CLUSTER_COLS = get_cluster_columns(GLOBAL_DB_PATH)
     sidebar = build_dynamic_sidebar(feature_info)
     nr_reads = get_number_of_reads(GLOBAL_DB_PATH)
     nr_ordinations = get_number_of_ordinations(GLOBAL_DB_PATH)
@@ -1196,58 +1326,27 @@ def build_layout():
                                     html.Div(style={"width": "1px", "backgroundColor": "#2e2e2e", "alignSelf": "stretch"}),
                                     html.Div(
                                         [
-                                            dbc.Button(
-                                                "Create Bin",
-                                                id='create-bin-button',
-                                                size="sm",
-                                                style={
-                                                    "backgroundColor": "#1e1e1e",
-                                                    "border": "1px solid #4a4a4a",
-                                                    "color": "#ccc",
-                                                    "fontSize": "0.75rem",
-                                                    "padding": "4px 14px",
-                                                    "whiteSpace": "nowrap",
-                                                }
-                                            ),
-                                            dbc.Button(
-                                                "Inspect Bin",
-                                                id='inspect-bin-button',
-                                                size="sm",
-                                                style={
-                                                    "backgroundColor": "#1e1e1e",
-                                                    "border": "1px solid #3a3a3a",
-                                                    "color": "#888",
-                                                    "fontSize": "0.75rem",
-                                                    "padding": "4px 14px",
-                                                    "whiteSpace": "nowrap",
-                                                }
-                                            ),
-                                            dbc.Button(
-                                                "Overlay Points",
-                                                id='overlay-points-button',
-                                                size="sm",
-                                                style={
-                                                    "backgroundColor": "#1e1e1e",
-                                                    "border": "1px solid #3a3a3a",
-                                                    "color": "#888",
-                                                    "fontSize": "0.75rem",
-                                                    "padding": "4px 14px",
-                                                    "whiteSpace": "nowrap",
-                                                }
-                                            ),
-                                            dbc.Button(
-                                                "Clear Plots",
-                                                id='clear-plots-button',
-                                                size="sm",
-                                                style={
-                                                    "backgroundColor": "#1e1e1e",
-                                                    "border": "1px solid #3a3a3a",
-                                                    "color": "#666",
-                                                    "fontSize": "0.75rem",
-                                                    "padding": "4px 14px",
-                                                    "whiteSpace": "nowrap",
-                                                }
-                                            ),
+                                            *[
+                                                dbc.Button(
+                                                    label,
+                                                    id=btn_id,
+                                                    size="sm",
+                                                    style={
+                                                        "backgroundColor": "#1e1e1e",
+                                                        "border": "1px solid #3a3a3a",
+                                                        "color": "#888",
+                                                        "fontSize": "0.75rem",
+                                                        "padding": "4px 14px",
+                                                        "whiteSpace": "nowrap",
+                                                    }
+                                                )
+                                                for label, btn_id in [
+                                                    ("Create Bin",     "create-bin-button"),
+                                                    ("Inspect Bin",    "inspect-bin-button"),
+                                                    ("Overlay Points", "overlay-points-button"),
+                                                    ("Clear Plots",    "clear-plots-button"),
+                                                ]
+                                            ],
                                         ],
                                         style={
                                             "display": "flex",
@@ -1486,7 +1585,8 @@ def update_multiple_coord_plots(
 
             base_img = create_datashader_image(
                 df, xcol, ycol, panel_feature, panel_palette,
-                px_spread=px_spread
+                px_spread=px_spread,
+                cluster_cols=CLUSTER_COLS,
             )
             fig.add_layout_image({
                 "source": base_img,
