@@ -441,7 +441,7 @@ class SpatialiteDatabase(Operation):
 
         conn.close()
         context.register("database", output_path)
-        inspect_database(output_path)
+        #inspect_database(output_path)
 
 
 class Clustering(Operation):
