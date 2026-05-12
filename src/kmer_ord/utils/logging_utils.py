@@ -11,3 +11,6 @@ def info(message: str) -> None:
 
 def warn(message: str) -> None:
     console.print(f"    WARNING  {message}", style="Dim", markup=False, highlight=False)
+
+def divider() -> None:
+    console.print("    " + "─" * 52, style="Dim")
