@@ -23,4 +23,11 @@ def run_tiara(input_file, output_file, threads=1, script_name="tiara"):
                    stdout=subprocess.DEVNULL,
                    stderr=subprocess.DEVNULL)
 
+    # Tiara writes full FASTA headers as sequence IDs; strip to the token
+    # before the first space to match the rest of the pipeline.
+    import pandas as pd
+    df = pd.read_csv(output_file, sep="\t")
+    df.iloc[:, 0] = df.iloc[:, 0].str.split().str[0]
+    df.to_csv(output_file, sep="\t", index=False)
+
     return output_file
