@@ -46,11 +46,12 @@ def calculate_kmer_metrics_chunk(kmer_df: pd.DataFrame) -> pd.DataFrame:
 def process_kmer_file(
     input_file: str,
     output_file: str = None,
-    chunksize: int = 1000,
+    chunksize: int = 25000,
     cpus: int = 1,
     total_rows: int = None,) -> pd.DataFrame:
     """Process a k-mer matrix to compute metrics, optionally parallelized."""
     from concurrent.futures import ProcessPoolExecutor
+    import numpy as np
     section("Calculating k-mer metrics")
     if output_file:
         os.makedirs(os.path.dirname(output_file), exist_ok=True)
@@ -59,60 +60,28 @@ def process_kmer_file(
 
     dtypes = build_dtypes(input_file)
     reader = pd.read_csv(input_file, sep="\t", index_col=0, dtype=dtypes, chunksize=chunksize)
-    
-    all_chunks = []
 
-    def write_chunk(metrics_chunk: pd.DataFrame, first: bool = False):
-        if output_file:
-            metrics_chunk.to_csv(
-                output_file,
-                sep="\t",
-                mode="w" if first else "a",
-                header=first)
-
-    first_chunk = True
-    processed_rows = 0
-    approx_total_chunks = math.ceil(total_rows / chunksize) if total_rows else None
+    chunks = list(reader)
 
     if cpus <= 1:
-        # Sequential
-        for chunk_id, chunk in enumerate(reader, start=1):
-            metrics_chunk = calculate_kmer_metrics_chunk(chunk)
-            write_chunk(metrics_chunk, first_chunk)
-            first_chunk = False
-            processed_rows += len(chunk)
-            all_chunks.append(metrics_chunk)
-            if total_rows:
-                pct = processed_rows / total_rows * 100
-                #print(f"[INFO] Chunk {chunk_id} processed ({pct:.2f}%)")
+        results = [calculate_kmer_metrics_chunk(chunk) for chunk in chunks]
     else:
-        # Parallel
-        in_flight = []
-        with ProcessPoolExecutor(max_workers=cpus) as ex:
-            for chunk_id, chunk in enumerate(reader, start=1):
-                fut = ex.submit(calculate_kmer_metrics_chunk, chunk)
-                in_flight.append((fut, chunk_id, len(chunk)))
-                if len(in_flight) >= cpus:
-                    fut_done, cid, rows = in_flight.pop(0)
-                    metrics_chunk = fut_done.result()
-                    write_chunk(metrics_chunk, first_chunk)
-                    first_chunk = False
-                    processed_rows += rows
-                    all_chunks.append(metrics_chunk)
-                    if total_rows:
-                        pct = processed_rows / total_rows * 100
-                        #print(f"[INFO] Chunk {cid} processed ({pct:.2f}%)")
-            # Drain remaining
-            for fut_done, cid, rows in in_flight:
-                metrics_chunk = fut_done.result()
-                write_chunk(metrics_chunk, first_chunk)
-                first_chunk = False
-                processed_rows += rows
-                all_chunks.append(metrics_chunk)
-                if total_rows:
-                    pct = processed_rows / total_rows * 100
-                    #print(f"[INFO] Chunk {cid} processed ({pct:.2f}%)")
-    
-    # Combine all chunks into a single DataFrame for pipeline
-    combined_metrics = pd.concat(all_chunks)
+        with ProcessPoolExecutor(max_workers=cpus) as executor:
+            futures = [executor.submit(calculate_kmer_metrics_chunk, chunk) for chunk in chunks]
+            results = [f.result() for f in futures]  # collect in submission order
+
+    combined_metrics = pd.concat(results)
+
+    if output_file:
+        combined_metrics.to_csv(output_file, sep="\t")
+
+    # Dataset-wide summary
+    shannon = combined_metrics["shannon_diversity"].to_numpy()
+    unique_kmers = combined_metrics["num_unique_kmers"].to_numpy()
+    w = 20
+    info(f"{'shannon diversity':<{w}}  {'mean':<4} {shannon.mean():8.3f}  {'sd':<3} {shannon.std(ddof=1):8.3f}")
+    info(f"{'shannon range':<{w}}  {'min':<4} {shannon.min():8.3f}  {'max':<3} {shannon.max():8.3f}")
+    info(f"{'unique kmers':<{w}}  {'mean':<4} {unique_kmers.mean():8.1f}  {'sd':<3} {unique_kmers.std(ddof=1):8.1f}")
+    info(f"{'unique kmers range':<{w}}  {'min':<4} {unique_kmers.min():8.0f}  {'max':<3} {unique_kmers.max():8.0f}")
+
     return combined_metrics

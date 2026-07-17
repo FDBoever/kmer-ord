@@ -168,7 +168,7 @@ def run_pipeline(
         FastqToFasta(),
         FastaStats(),
         KmerCount(kmer_length=kmer_length, threads=threads),
-        KmerMetrics(chunksize=1000, cpus=threads),
+        KmerMetrics(chunksize=25000, cpus=threads),
     ]
 
     if run_tiara:
@@ -562,7 +562,7 @@ if __name__ == "__main__":
 def kmer_metrics_cmd(
     input: Path = typer.Option(..., "-i", "--input",help="Input k-mer matrix TSV"),
     output_dir: Path = typer.Option(..., "-o","--output", help="Output directory"),
-    chunksize: int = typer.Option(1000, "--chunksize", help="Rows per chunk"),
+    chunksize: int = typer.Option(25000, "--chunksize", help="Rows per chunk"),
     cpus: int = typer.Option(1, "--cpus", help="Number of worker processes"),
     force: bool = typer.Option(False, "-f","--force", help="Recompute even if output exists"),):
     """

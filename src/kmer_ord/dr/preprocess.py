@@ -16,9 +16,9 @@ def preprocess_data(df: pd.DataFrame, method: str) -> pd.DataFrame:
         return X
 
     elif method == "relative":
-        row_sums = X.sum(axis=1, keepdims=True)
+        row_sums = X.sum(axis=1)
         row_sums[row_sums == 0] = 1
-        X = X.div(row_sums.flatten(), axis=0)
+        X = X.div(row_sums, axis=0)
         return X
 
     elif method == "log":
