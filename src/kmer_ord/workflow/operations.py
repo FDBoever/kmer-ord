@@ -9,6 +9,7 @@ import typer
 from kmer_ord.io.summary import calculate_stats
 from kmer_ord.io.kmer_counter import run_kmer_counter
 from kmer_ord.io.run_tiara import run_tiara
+from kmer_ord.io.run_rdna import run_rdna_miner
 from .operation import Operation
 from kmer_ord.utils.benchmark import BenchmarkTimer
 
@@ -326,6 +327,42 @@ class Tiara(Operation):
         context.register("tiara", output_file)
 
 
+class RDNAMiner(Operation):
+    name = "rdna"
+    requires = ["fasta"]
+    produces = ["rdna"]
+
+    def __init__(self, threads=1, platform="auto"):
+        self.threads = threads
+        self.platform = platform
+
+    def run(self, context):
+        input_fasta = context.get("fasta")
+
+        raw_dir = context.output_dir / "rdna" / "raw"
+        feature_file = context.artifact_path(name="rdna",
+                                             subdir="rdna",
+                                             suffix=".tsv")
+        feature_file.parent.mkdir(parents=True, exist_ok=True)
+
+        with BenchmarkTimer(
+            label=self.name,
+            input_file=input_fasta,
+            input_args=f"threads={self.threads} platform={self.platform}"):
+            if feature_file.exists() and not context.force:
+                typer.echo(f"Skipping rDNA-miner, output exists: {feature_file}")
+                context.logger.info(f"Skipping rDNA-miner, output exists: {feature_file}")
+            else:
+                run_rdna_miner(input_file=input_fasta,
+                                output_dir=raw_dir,
+                                feature_file=feature_file,
+                                threads=self.threads,
+                                platform=self.platform)
+
+        if feature_file.exists():
+            context.register("rdna", feature_file)
+
+
 class FeatureMerge(Operation):
     name = "feature-merge"
     requires = ["kmer_metrics", "summary_per_sequence"]
@@ -357,6 +394,16 @@ class FeatureMerge(Operation):
         if tiara_path:
             tiara_df = normalize_id_column(pd.read_csv(tiara_path, sep="\t"))
             merged = merged.merge(tiara_df, on="sequence_id", how="left")
+
+        #merge rdna-miner taxonomy based on sequence_id, if exists
+        try:
+            rdna_path = context.get("rdna")
+        except ValueError:
+            rdna_path = None
+
+        if rdna_path:
+            rdna_df = normalize_id_column(pd.read_csv(rdna_path, sep="\t"))
+            merged = merged.merge(rdna_df, on="sequence_id", how="left")
 
         if merged["sequence_id"].duplicated().any():
             raise RuntimeError("Duplicate sequence_id detected after merge.")
