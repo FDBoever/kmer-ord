@@ -136,6 +136,10 @@ def run_pipeline(
 
     # --- Tiara ---
     run_tiara: bool = typer.Option(False, "--tiara/--no-tiara", help="Run Tiara taxonomic classification and include results in the feature table (requires Tiara environment from kmer-ord setup)."),
+
+    # --- rDNA-miner ---
+    run_rdna: bool = typer.Option(False, "--rDNA/--no-rDNA", help="Run rDNA-miner (extract, assemble and classify rDNA reads) and include per-read taxonomy in the feature table (requires rDNA-miner environment from kmer-ord setup)."),
+    rdna_platform: str = typer.Option("auto", "--rdna-platform", help="Sequencing platform for rDNA-miner (auto, ont, pacbio)"),
 ):
     """
     [+] Projection pipeline:
@@ -143,7 +147,7 @@ def run_pipeline(
     compute sequence-level metrics, and generate a low-dimensional
     (2D/3D) embedding that captures geometric relationships in k-mer space.
     Results are stored in the database for dowstream exploration and annotation.
-    | fastq -> fasta -> sequence stats -> kmer-counting -> [tiara] -> DR -> database |
+    | fastq -> fasta -> sequence stats -> kmer-counting -> [tiara] -> [rDNA] -> DR -> database |
     """
     start_time = datetime.datetime.now()
     print_header(start_time)
@@ -156,7 +160,7 @@ def run_pipeline(
 
     from kmer_ord.io.summary import calculate_stats
     from kmer_ord.workflow.operations import (
-        FastqToFasta, FastaStats, KmerCount, KmerMetrics, Tiara, MatrixPreprocessing,
+        FastqToFasta, FastaStats, KmerCount, KmerMetrics, Tiara, RDNAMiner, MatrixPreprocessing,
         DimensionalityReduction, FeatureMerge, SpatialiteDatabase)
 
     context = Context(input, output_dir, force=force, threads=threads)
@@ -176,6 +180,12 @@ def run_pipeline(
         operations.append(Tiara(threads=threads))
     else:
         info("Tiara classification skipped (pass --tiara to enable).")
+
+    if run_rdna:
+        info("rDNA-miner classification enabled.")
+        operations.append(RDNAMiner(threads=threads, platform=rdna_platform))
+    else:
+        info("rDNA-miner classification skipped (pass --rDNA to enable).")
 
     operations += [
         MatrixPreprocessing(
@@ -670,6 +680,29 @@ def run_tiara_cmd(
     operation.run(context)
 
     info(f"Tiara output saved at: {context.get('tiara')}")
+
+
+@app.command("run-rdna", rich_help_panel="Modules")
+def run_rdna_cmd(
+    input: Path = typer.Option(..., "-i","--input", help="Input fasta file"),
+    output_dir: Path = typer.Option(..., "-o","--output", help="Output directory"),
+    threads: int = typer.Option(1, "-t", help="Number of threads"),
+    platform: str = typer.Option("auto", "-p", "--platform", help="Sequencing platform (auto, ont, pacbio)"),
+    force: bool = typer.Option(False, "-f", "--force", help="Recompute even if output exists"),):
+    """
+    Run rDNA-miner (extract, assemble and classify rDNA reads) on a fasta file.
+    """
+    from kmer_ord.workflow.operations import RDNAMiner
+
+    context = Context(input, output_dir, force=force, threads=threads)
+
+    operation = RDNAMiner(threads=threads, platform=platform)
+    operation.run(context)
+
+    if context.exists("rdna"):
+        info(f"rDNA-miner output saved at: {context.get('rdna')}")
+    else:
+        info("rDNA-miner produced no output.")
 
 
 @app.command("build-db", rich_help_panel="Modules")
