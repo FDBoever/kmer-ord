@@ -178,6 +178,11 @@ class DimensionalityReduction(Operation):
         scale="auto",
         seed=42,
         screen_params=False,
+        screen_values1=None,
+        screen_values2=None,
+        screen_range1=None,
+        screen_range2=None,
+        screen_grid=None,
         max_memory_gb=None,
         threads=1,
     ):
@@ -186,6 +191,11 @@ class DimensionalityReduction(Operation):
         self.scale = scale
         self.seed = seed
         self.screen_params = screen_params
+        self.screen_values1 = screen_values1
+        self.screen_values2 = screen_values2
+        self.screen_range1 = screen_range1
+        self.screen_range2 = screen_range2
+        self.screen_grid = screen_grid
         self.max_memory_gb = max_memory_gb
         self.threads = threads
 
@@ -247,6 +257,11 @@ class DimensionalityReduction(Operation):
                 seed=self.seed,
                 scale=self.scale,
                 screen_params=self.screen_params,
+                screen_values1=self.screen_values1,
+                screen_values2=self.screen_values2,
+                screen_range1=self.screen_range1,
+                screen_range2=self.screen_range2,
+                screen_grid=self.screen_grid,
                 output_dir=dr_dir,
                 normalisation=norm_label,
                 input_name=input_name,

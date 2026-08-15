@@ -166,6 +166,11 @@ def run_dr_methods(
     input_name: str,
     sequence_ids: list | pd.Index | None = None,
     n_jobs: int = 1,
+    screen_values1: list[str] | None = None,
+    screen_values2: list[str] | None = None,
+    screen_range1: list[str] | None = None,
+    screen_range2: list[str] | None = None,
+    screen_grid: str | None = None,
 ) -> tuple[Path, list[Path]]:
     """
     Run selected DR methods for a single normalisation.
@@ -236,6 +241,11 @@ def run_dr_methods(
                 input_name=input_name,
                 sequence_ids=sequence_ids,
                 n_jobs=n_jobs,
+                values1=screen_values1,
+                values2=screen_values2,
+                range1=screen_range1,
+                range2=screen_range2,
+                grid=screen_grid,
             )
 
         # Default embedding
@@ -301,11 +311,22 @@ def _run_parameter_screen(
     input_name: str,
     sequence_ids: list | pd.Index,
     n_jobs: int = 1,
+    values1: list[str] | None = None,
+    values2: list[str] | None = None,
+    range1: list[str] | None = None,
+    range2: list[str] | None = None,
+    grid: str | None = None,
 ) -> list[Path]:
     """
     Perform parameter screening for a given DR method.
     Saves individual files for each parameter combination with sequence_id column.
     Returns list of saved paths.
+
+    Grid resolution (values1/values2/range1/range2/grid) is handled by
+    dr/screen_grid.py::resolve_method_grid() — see its docstring. No overrides
+    given at all reproduces the original hardcoded 2D grid exactly. A 1D grid
+    (axis2_vals is None) holds the second parameter fixed at this method's own
+    scale-preset default from DR_HYPERPARAMS.
     """
 
     import pandas as pd
@@ -323,7 +344,14 @@ def _run_parameter_screen(
     from pacmap import PaCMAP
     from pacmap.pacmap import LocalMAP
 
+    from kmer_ord.vis.embedding_plots import render_param_screen_density_grid
+    from kmer_ord.dr.screen_grid import resolve_method_grid, SCREEN_AXES
+
     output_paths = []
+    # (axis1_value, axis2_value, coords_df) per combination — collected so a
+    # single density grid can be rendered once per method after its loop,
+    # without re-reading anything back from disk.
+    density_combos: list[tuple[float, float, pd.DataFrame]] = []
 
     def save_embedding(embedding: np.ndarray, param_str: str):
         """Helper to save a DataFrame with sequence_id."""
@@ -332,73 +360,160 @@ def _run_parameter_screen(
         out_file = output_dir / f"{input_name}_{normalisation}_{method}_{param_str}_{dims}D.tsv"
         df.to_csv(out_file, sep="\t", index=False)
         output_paths.append(out_file)
+        return df
+
+    def track_density(axis1_value: float, axis2_value: float, df: pd.DataFrame):
+        if dims >= 2:
+            density_combos.append((axis1_value, axis2_value, df))
 
     import time as _time
 
     pw = 36  # fixed width for params column so elapsed times align
 
+    axis1_name, axis2_name = SCREEN_AXES[method] if method in SCREEN_AXES else (None, None)
+    axis1_vals, axis2_vals = (
+        resolve_method_grid(method, values1, values2, range1, range2, grid)
+        if method in SCREEN_AXES else (None, None)
+    )
+    default_axis2 = DR_HYPERPARAMS.get(method, {}).get("default", {}).get(axis2_name)
+
     if method == "umap":
-        n_neighbors_values = [5, 10, 50, 100, 150]
-        min_dist_values = [0, 0.1, 0.25, 0.5, 1.0]
-        section(f"parameter screen  ·  umap  ({len(n_neighbors_values) * len(min_dist_values)} combinations)")
-        for n in n_neighbors_values:
-            for m in min_dist_values:
+        if axis2_vals is None:
+            section(f"parameter screen  ·  umap  ({len(axis1_vals)} values, 1D)")
+            for n in axis1_vals:
                 t0 = _time.perf_counter()
-                model = umap.UMAP(n_components=dims, n_neighbors=n, min_dist=m, n_jobs=n_jobs)
+                kwargs = {"n_neighbors": n}
+                if default_axis2 is not None:
+                    kwargs["min_dist"] = default_axis2
+                model = umap.UMAP(n_components=dims, n_jobs=n_jobs, **kwargs)
                 embedding = model.fit_transform(X)
-                save_embedding(embedding, param_str=f"n{n}_min{m}")
-                info(f"{'n_neighbors=' + str(n) + '  min_dist=' + str(m):<{pw}}  {_fmt_time(_time.perf_counter() - t0)}")
+                df = save_embedding(embedding, param_str=f"n{n}")
+                track_density(n, default_axis2 or 0, df)
+                info(f"{'n_neighbors=' + str(n):<{pw}}  {_fmt_time(_time.perf_counter() - t0)}")
+        else:
+            section(f"parameter screen  ·  umap  ({len(axis1_vals) * len(axis2_vals)} combinations)")
+            for n in axis1_vals:
+                for m in axis2_vals:
+                    t0 = _time.perf_counter()
+                    model = umap.UMAP(n_components=dims, n_neighbors=n, min_dist=m, n_jobs=n_jobs)
+                    embedding = model.fit_transform(X)
+                    df = save_embedding(embedding, param_str=f"n{n}_min{m}")
+                    track_density(n, m, df)
+                    info(f"{'n_neighbors=' + str(n) + '  min_dist=' + str(m):<{pw}}  {_fmt_time(_time.perf_counter() - t0)}")
 
     elif method == "tsne":
-        perplexity_values = [5, 10, 30, 50, 100]
-        learning_rate_values = [10, 100, 200, 500]
-        section(f"parameter screen  ·  tsne  ({len(perplexity_values) * len(learning_rate_values)} combinations)")
-        for p in perplexity_values:
-            for lr in learning_rate_values:
+        if axis2_vals is None:
+            section(f"parameter screen  ·  tsne  ({len(axis1_vals)} values, 1D)")
+            for p in axis1_vals:
                 t0 = _time.perf_counter()
-                model = TSNE(n_components=dims, perplexity=p, learning_rate=lr,
-                             max_iter=1000, random_state=seed, n_jobs=n_jobs)
+                kwargs = {"perplexity": p}
+                if default_axis2 is not None:
+                    kwargs["learning_rate"] = default_axis2
+                model = TSNE(n_components=dims, max_iter=1000, random_state=seed, n_jobs=n_jobs, **kwargs)
                 embedding = model.fit_transform(X)
-                save_embedding(embedding, param_str=f"p{p}_lr{lr}")
-                info(f"{'perplexity=' + str(p) + '  learning_rate=' + str(lr):<{pw}}  {_fmt_time(_time.perf_counter() - t0)}")
+                df = save_embedding(embedding, param_str=f"p{p}")
+                track_density(p, default_axis2 or 0, df)
+                info(f"{'perplexity=' + str(p):<{pw}}  {_fmt_time(_time.perf_counter() - t0)}")
+        else:
+            section(f"parameter screen  ·  tsne  ({len(axis1_vals) * len(axis2_vals)} combinations)")
+            for p in axis1_vals:
+                for lr in axis2_vals:
+                    t0 = _time.perf_counter()
+                    model = TSNE(n_components=dims, perplexity=p, learning_rate=lr,
+                                 max_iter=1000, random_state=seed, n_jobs=n_jobs)
+                    embedding = model.fit_transform(X)
+                    df = save_embedding(embedding, param_str=f"p{p}_lr{lr}")
+                    track_density(p, lr, df)
+                    info(f"{'perplexity=' + str(p) + '  learning_rate=' + str(lr):<{pw}}  {_fmt_time(_time.perf_counter() - t0)}")
 
     elif method == "trimap":
-        n_inliers_values = [10, 25, 50, 100, 150]
-        weight_temp_values = [0.1, 0.5, 1.0, 2.0, 2.5]
-        section(f"parameter screen  ·  trimap  ({len(n_inliers_values) * len(weight_temp_values)} combinations)")
-        for n in n_inliers_values:
-            for w in weight_temp_values:
+        if axis2_vals is None:
+            section(f"parameter screen  ·  trimap  ({len(axis1_vals)} values, 1D)")
+            for n in axis1_vals:
                 t0 = _time.perf_counter()
-                model = TRIMAP(n_dims=dims, n_inliers=n, weight_temp=w)
+                kwargs = {"n_inliers": n}
+                if default_axis2 is not None:
+                    kwargs["weight_temp"] = default_axis2
+                model = TRIMAP(n_dims=dims, **kwargs)
                 embedding = model.fit_transform(X)
-                save_embedding(embedding, param_str=f"inliers{n}_weighttemp{w}")
-                info(f"{'n_inliers=' + str(n) + '  weight_temp=' + str(w):<{pw}}  {_fmt_time(_time.perf_counter() - t0)}")
+                df = save_embedding(embedding, param_str=f"inliers{n}")
+                track_density(n, default_axis2 or 0, df)
+                info(f"{'n_inliers=' + str(n):<{pw}}  {_fmt_time(_time.perf_counter() - t0)}")
+        else:
+            section(f"parameter screen  ·  trimap  ({len(axis1_vals) * len(axis2_vals)} combinations)")
+            for n in axis1_vals:
+                for w in axis2_vals:
+                    t0 = _time.perf_counter()
+                    model = TRIMAP(n_dims=dims, n_inliers=n, weight_temp=w)
+                    embedding = model.fit_transform(X)
+                    df = save_embedding(embedding, param_str=f"inliers{n}_weighttemp{w}")
+                    track_density(n, w, df)
+                    info(f"{'n_inliers=' + str(n) + '  weight_temp=' + str(w):<{pw}}  {_fmt_time(_time.perf_counter() - t0)}")
 
     elif method == "pacmap":
-        n_neighbors_values = [10, 25, 50, 100, 150]
-        FP_ratio_values = [0.1, 0.5, 1.0, 2.0, 5]
-        section(f"parameter screen  ·  pacmap  ({len(n_neighbors_values) * len(FP_ratio_values)} combinations)")
-        for n in n_neighbors_values:
-            for fp in FP_ratio_values:
+        if axis2_vals is None:
+            section(f"parameter screen  ·  pacmap  ({len(axis1_vals)} values, 1D)")
+            for n in axis1_vals:
                 t0 = _time.perf_counter()
-                model = PaCMAP(n_components=dims, n_neighbors=n, FP_ratio=fp)
+                kwargs = {"n_neighbors": n}
+                if default_axis2 is not None:
+                    kwargs["FP_ratio"] = default_axis2
+                model = PaCMAP(n_components=dims, **kwargs)
                 embedding = model.fit_transform(X)
-                save_embedding(embedding, param_str=f"n{n}_FPratio{fp}")
-                info(f"{'n_neighbors=' + str(n) + '  FP_ratio=' + str(fp):<{pw}}  {_fmt_time(_time.perf_counter() - t0)}")
+                df = save_embedding(embedding, param_str=f"n{n}")
+                track_density(n, default_axis2 or 0, df)
+                info(f"{'n_neighbors=' + str(n):<{pw}}  {_fmt_time(_time.perf_counter() - t0)}")
+        else:
+            section(f"parameter screen  ·  pacmap  ({len(axis1_vals) * len(axis2_vals)} combinations)")
+            for n in axis1_vals:
+                for fp in axis2_vals:
+                    t0 = _time.perf_counter()
+                    model = PaCMAP(n_components=dims, n_neighbors=n, FP_ratio=fp)
+                    embedding = model.fit_transform(X)
+                    df = save_embedding(embedding, param_str=f"n{n}_FPratio{fp}")
+                    track_density(n, fp, df)
+                    info(f"{'n_neighbors=' + str(n) + '  FP_ratio=' + str(fp):<{pw}}  {_fmt_time(_time.perf_counter() - t0)}")
 
     elif method == "localmap":
-        n_neighbors_values = [10, 25, 50, 100, 150]
-        FP_ratio_values = [0.1, 0.5, 1.0, 2.0, 5]
-        section(f"parameter screen  ·  localmap  ({len(n_neighbors_values) * len(FP_ratio_values)} combinations)")
-        for n in n_neighbors_values:
-            for fp in FP_ratio_values:
+        if axis2_vals is None:
+            section(f"parameter screen  ·  localmap  ({len(axis1_vals)} values, 1D)")
+            for n in axis1_vals:
                 t0 = _time.perf_counter()
-                model = LocalMAP(n_components=dims, n_neighbors=n, FP_ratio=fp)
+                kwargs = {"n_neighbors": n}
+                if default_axis2 is not None:
+                    kwargs["FP_ratio"] = default_axis2
+                model = LocalMAP(n_components=dims, **kwargs)
                 embedding = model.fit_transform(X)
-                save_embedding(embedding, param_str=f"n{n}_FPratio{fp}")
-                info(f"{'n_neighbors=' + str(n) + '  FP_ratio=' + str(fp):<{pw}}  {_fmt_time(_time.perf_counter() - t0)}")
+                df = save_embedding(embedding, param_str=f"n{n}")
+                track_density(n, default_axis2 or 0, df)
+                info(f"{'n_neighbors=' + str(n):<{pw}}  {_fmt_time(_time.perf_counter() - t0)}")
+        else:
+            section(f"parameter screen  ·  localmap  ({len(axis1_vals) * len(axis2_vals)} combinations)")
+            for n in axis1_vals:
+                for fp in axis2_vals:
+                    t0 = _time.perf_counter()
+                    model = LocalMAP(n_components=dims, n_neighbors=n, FP_ratio=fp)
+                    embedding = model.fit_transform(X)
+                    df = save_embedding(embedding, param_str=f"n{n}_FPratio{fp}")
+                    track_density(n, fp, df)
+                    info(f"{'n_neighbors=' + str(n) + '  FP_ratio=' + str(fp):<{pw}}  {_fmt_time(_time.perf_counter() - t0)}")
 
     else:
         raise ValueError(f"Parameter screening not implemented for method: {method}")
+
+    # Default output: a per-panel density grid, rendered once per method,
+    # requiring no feature/label join — see vis/embedding_plots.py's
+    # render_param_screen_density_grid() docstring for why panels are scaled
+    # independently rather than to a shared axis range.
+    if density_combos:
+        render_param_screen_density_grid(
+            combos=density_combos,
+            axis1_name=axis1_name,
+            axis2_name=axis2_name,
+            xcol=f"{method}_1",
+            ycol=f"{method}_2",
+            outdir=output_dir,
+            method=method,
+        )
 
     return output_paths

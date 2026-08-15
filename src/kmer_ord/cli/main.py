@@ -1,6 +1,7 @@
 # src/kmer_ord/cli/main.py
 import typer
 from pathlib import Path
+from typing import List, Optional
 import platform
 import datetime
 
@@ -133,6 +134,11 @@ def run_pipeline(
     keep_pcs: int = typer.Option(None,"--keep-pcs", help="Number of principal components to retain"),
     keep_variance: float = typer.Option(None,"--keep-variance",help="Variance threshold for PCA (e.g. 0.9)"),
     screen_params: bool = typer.Option(False, "--screen_params", help="Run parameter screening for supported DR methods"),
+    screen_values1: List[str] = typer.Option([], "--screen_values1", help="Explicit axis-1 (count-like) values per method: 'method=v1,v2,...' or 'all=v1,v2,...'. Repeatable."),
+    screen_values2: List[str] = typer.Option([], "--screen_values2", help="Explicit axis-2 values per method: 'method=v1,v2,...'. Repeatable."),
+    screen_range1: List[str] = typer.Option([], "--screen_range1", help="Axis-1 range for auto-generated grids: 'method=min,max' or 'all=min,max'. Repeatable."),
+    screen_range2: List[str] = typer.Option([], "--screen_range2", help="Axis-2 range for auto-generated grids: 'method=min,max'. Repeatable."),
+    screen_grid: Optional[str] = typer.Option(None, "--screen_grid", help="Grid size for auto-generated screens: 'N' (1D) or 'NxM' (2D). Applies to every screened method."),
 
     # --- Tiara ---
     run_tiara: bool = typer.Option(False, "--tiara/--no-tiara", help="Run Tiara taxonomic classification and include results in the feature table (requires Tiara environment from kmer-ord setup)."),
@@ -199,6 +205,11 @@ def run_pipeline(
             dims=dims,
             scale=scale,
             screen_params=screen_params,
+            screen_values1=screen_values1,
+            screen_values2=screen_values2,
+            screen_range1=screen_range1,
+            screen_range2=screen_range2,
+            screen_grid=screen_grid,
             threads=threads,),
         FeatureMerge(),
         SpatialiteDatabase()]
@@ -223,6 +234,11 @@ def discover_pipeline(
     keep_pcs: int = typer.Option(None,"--keep-pcs", help="Number of principal components to retain"),
     keep_variance: float = typer.Option(None,"--keep-variance",help="Variance threshold for PCA (e.g. 0.9)"),
     screen_params: bool = typer.Option(False, "--screen_params", help="Run parameter screening for supported DR methods"),
+    screen_values1: List[str] = typer.Option([], "--screen_values1", help="Explicit axis-1 (count-like) values per method: 'method=v1,v2,...' or 'all=v1,v2,...'. Repeatable."),
+    screen_values2: List[str] = typer.Option([], "--screen_values2", help="Explicit axis-2 values per method: 'method=v1,v2,...'. Repeatable."),
+    screen_range1: List[str] = typer.Option([], "--screen_range1", help="Axis-1 range for auto-generated grids: 'method=min,max' or 'all=min,max'. Repeatable."),
+    screen_range2: List[str] = typer.Option([], "--screen_range2", help="Axis-2 range for auto-generated grids: 'method=min,max'. Repeatable."),
+    screen_grid: Optional[str] = typer.Option(None, "--screen_grid", help="Grid size for auto-generated screens: 'N' (1D) or 'NxM' (2D). Applies to every screened method."),
 
     cluster_methods: str = typer.Option("hdbscan", "--cluster", help="Comma-separated clustering methods (leiden,hdbscan,dbscan)"),
     leiden_sweep: bool = typer.Option(False, "--leiden-sweep", help="Run Leiden resolution sweep"),
@@ -285,6 +301,11 @@ def discover_pipeline(
             dims=dims,
             scale=scale,
             screen_params=screen_params,
+            screen_values1=screen_values1,
+            screen_values2=screen_values2,
+            screen_range1=screen_range1,
+            screen_range2=screen_range2,
+            screen_grid=screen_grid,
             threads=threads,)]
 
     # -----------------------------
@@ -601,6 +622,11 @@ def dr_cmd(
     keep_pcs: int = typer.Option(None, "--keep-pcs"),
     keep_variance: float = typer.Option(None, "--keep-variance"),
     screen_params: bool = typer.Option(False, "--screen_params", help="Run parameter screening for supported DR methods"),
+    screen_values1: List[str] = typer.Option([], "--screen_values1", help="Explicit axis-1 (count-like) values per method: 'method=v1,v2,...' or 'all=v1,v2,...'. Repeatable."),
+    screen_values2: List[str] = typer.Option([], "--screen_values2", help="Explicit axis-2 values per method: 'method=v1,v2,...'. Repeatable."),
+    screen_range1: List[str] = typer.Option([], "--screen_range1", help="Axis-1 range for auto-generated grids: 'method=min,max' or 'all=min,max'. Repeatable."),
+    screen_range2: List[str] = typer.Option([], "--screen_range2", help="Axis-2 range for auto-generated grids: 'method=min,max'. Repeatable."),
+    screen_grid: Optional[str] = typer.Option(None, "--screen_grid", help="Grid size for auto-generated screens: 'N' (1D) or 'NxM' (2D). Applies to every screened method."),
     threads: int = typer.Option(4, "-t","--threads", help="Number of threads"),
 ):
     """
@@ -630,6 +656,11 @@ def dr_cmd(
             dims=dims,
             scale=scale,
             screen_params=screen_params,
+            screen_values1=screen_values1,
+            screen_values2=screen_values2,
+            screen_range1=screen_range1,
+            screen_range2=screen_range2,
+            screen_grid=screen_grid,
             threads=threads,
         ),
     ]
